@@ -124,13 +124,10 @@ class MusicBot(commands.Bot):  # Using commands.Bot for Slash Command support
                  config_file: Optional[pathlib.Path] = None, 
                  perms_file: Optional[pathlib.Path] = None, 
                  aliases_file: Optional[pathlib.Path] = None, 
-                 use_certifi: bool = False,
-                 intents: Optional[discord.Intents] = None) -> None:  # `intents` 매개변수 추가
-        if intents is None:
-            intents = discord.Intents.default()  # 기본 `intents` 설정
-            
-        super().__init__(command_prefix="!", intents=intents)  # `intents`가 중복되지 않도록 설정
-        
+                 use_certifi: bool = False) -> None:
+        # 기본 intents 설정 없이 command_prefix만 전달
+        super().__init__(command_prefix="!")
+
         log.info("Initializing MusicBot %s", BOTVERSION)
         load_opus_lib()
 
