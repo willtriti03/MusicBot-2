@@ -1,0 +1,12 @@
+[Unit]
+Description=Discord Music Bot Service
+After=network.target
+
+[Service]
+ExecStart=/home/discord/MusicBot-2/run.sh
+WorkingDirectory=/home/discord/MusicBot-2
+User=discord  # 봇이 실행될 사용자 계정
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
