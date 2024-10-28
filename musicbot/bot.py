@@ -24,6 +24,7 @@ import certifi  # type: ignore[import-untyped, unused-ignore]
 import discord
 import yt_dlp as youtube_dl  # type: ignore[import-untyped]
 
+from discord.ext import commands
 from . import downloader, exceptions
 from .aliases import Aliases, AliasesDefault
 from .autoplaylist import AutoPlaylistManager
