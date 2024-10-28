@@ -119,16 +119,18 @@ log = logging.getLogger(__name__)
 # TODO:  maybe allow aliases to contain whole/partial commands.
 
 
-class MusicBot(discord.Client):
-    def __init__(
-        self,
-        config_file: Optional[pathlib.Path] = None,
-        perms_file: Optional[pathlib.Path] = None,
-        aliases_file: Optional[pathlib.Path] = None,
-        use_certifi: bool = False,
-    ) -> None:
+class MusicBot(commands.Bot):  # Using commands.Bot for Slash Command support
+    def __init__(self, 
+                 config_file: Optional[pathlib.Path] = None, 
+                 perms_file: Optional[pathlib.Path] = None, 
+                 aliases_file: Optional[pathlib.Path] = None, 
+                 use_certifi: bool = False) -> None:
+        intents = discord.Intents.default()
+        super().__init__(command_prefix="!", intents=intents)  # Slash Commands rely on intents
+
         log.info("Initializing MusicBot %s", BOTVERSION)
         load_opus_lib()
+
 
         if config_file is None:
             self._config_file = ConfigDefaults.options_file
@@ -188,7 +190,7 @@ class MusicBot(discord.Client):
         intents = discord.Intents.all()
         intents.typing = False
         intents.presences = False
-        super().__init__(intents=intents)
+        super().__init__(command_prefix='!', intents=discord.Intents.default(),intents=intents)
 
     async def setup_hook(self) -> None:
         """async init phase that is called by d.py before login."""
