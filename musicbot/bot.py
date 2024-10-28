@@ -111,7 +111,7 @@ UserMentions = List[Union[discord.Member, discord.User]]
 EntryTypes = Union[URLPlaylistEntry, StreamPlaylistEntry, LocalFilePlaylistEntry]
 CommandResponse = Union[Response, None]
 
-
+bot = commands.Bot
 log = logging.getLogger(__name__)
 
 # TODO:  add an aliases command to manage command aliases.
@@ -4625,7 +4625,7 @@ class MusicBot(discord.Client):
             ).format(self.server_data[guild.id].command_prefix),
             delete_after=30,
         )
-    @discord.Client.tree.command(name="summon", description="봇을 현재 채널에 소환합니다")
+    @bot.tree.command(name="summon", description="봇을 현재 채널에 소환합니다")
     async def cmd_summon(
         self, guild: discord.Guild, author: discord.Member, message: discord.Message
     ) -> CommandResponse:
