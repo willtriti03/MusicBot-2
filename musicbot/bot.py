@@ -113,6 +113,7 @@ CommandResponse = Union[Response, None]
 
 bot = commands.Bot
 log = logging.getLogger(__name__)
+bot = commands.Bot
 
 # TODO:  add an aliases command to manage command aliases.
 # TODO:  maybe allow aliases to contain whole/partial commands.
