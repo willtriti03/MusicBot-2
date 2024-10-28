@@ -111,15 +111,14 @@ UserMentions = List[Union[discord.Member, discord.User]]
 EntryTypes = Union[URLPlaylistEntry, StreamPlaylistEntry, LocalFilePlaylistEntry]
 CommandResponse = Union[Response, None]
 
-bot = commands.Bot
+
 log = logging.getLogger(__name__)
-bot = commands.Bot
 
 # TODO:  add an aliases command to manage command aliases.
 # TODO:  maybe allow aliases to contain whole/partial commands.
 
 
-class MusicBot(commands.Bot):
+class MusicBot(discord.Client):
     def __init__(
         self,
         config_file: Optional[pathlib.Path] = None,
@@ -127,9 +126,6 @@ class MusicBot(commands.Bot):
         aliases_file: Optional[pathlib.Path] = None,
         use_certifi: bool = False,
     ) -> None:
-        intents = discord.Intents.default()
-        super().__init__(command_prefix="!", intents=intents)  # 기본값 있는 인자는 super()에 전달
-        
         log.info("Initializing MusicBot %s", BOTVERSION)
         load_opus_lib()
 
@@ -191,7 +187,7 @@ class MusicBot(commands.Bot):
         intents = discord.Intents.all()
         intents.typing = False
         intents.presences = False
-        super().__init__(command_prefix='!', intents=discord.Intents.default(),intents=intents)
+        super().__init__(intents=intents)
 
     async def setup_hook(self) -> None:
         """async init phase that is called by d.py before login."""
@@ -4629,7 +4625,7 @@ class MusicBot(commands.Bot):
             ).format(self.server_data[guild.id].command_prefix),
             delete_after=30,
         )
-    @bot.tree.command(name="summon", description="봇을 현재 채널에 소환합니다")
+    @commands.Bot.tree.command(name="summon", description="봇을 현재 채널에 소환합니다")
     async def cmd_summon(
         self, guild: discord.Guild, author: discord.Member, message: discord.Message
     ) -> CommandResponse:
