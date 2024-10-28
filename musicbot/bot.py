@@ -113,6 +113,7 @@ CommandResponse = Union[Response, None]
 
 
 log = logging.getLogger(__name__)
+bot = commands.Bot
 
 # TODO:  add an aliases command to manage command aliases.
 # TODO:  maybe allow aliases to contain whole/partial commands.
@@ -4628,7 +4629,7 @@ class MusicBot(commands.Bot):
             ).format(self.server_data[guild.id].command_prefix),
             delete_after=30,
         )
-    @commands.Bot.tree.command(name="summon", description="봇을 현재 채널에 소환합니다")
+    @bot.tree.command(name="summon", description="봇을 현재 채널에 소환합니다")
     async def cmd_summon(
         self, guild: discord.Guild, author: discord.Member, message: discord.Message
     ) -> CommandResponse:
