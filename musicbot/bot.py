@@ -119,7 +119,7 @@ bot = commands.Bot
 # TODO:  maybe allow aliases to contain whole/partial commands.
 
 
-class MusicBot(discord.Client):
+class MusicBot(commands.Bot):
     def __init__(
         self,
         config_file: Optional[pathlib.Path] = None,
@@ -127,6 +127,9 @@ class MusicBot(discord.Client):
         aliases_file: Optional[pathlib.Path] = None,
         use_certifi: bool = False,
     ) -> None:
+        intents = discord.Intents.default()
+        super().__init__(command_prefix="!", intents=intents)  # 기본값 있는 인자는 super()에 전달
+        
         log.info("Initializing MusicBot %s", BOTVERSION)
         load_opus_lib()
 
@@ -188,7 +191,7 @@ class MusicBot(discord.Client):
         intents = discord.Intents.all()
         intents.typing = False
         intents.presences = False
-        super().__init__(intents=intents)
+        super().__init__(command_prefix='!', intents=discord.Intents.default(),intents=intents)
 
     async def setup_hook(self) -> None:
         """async init phase that is called by d.py before login."""
