@@ -120,19 +120,17 @@ log = logging.getLogger(__name__)
 
 
 class MusicBot(commands.Bot):
-    def __init__(
-            self,
-            config_file: Optional[pathlib.Path] = None,
-            perms_file: Optional[pathlib.Path] = None,
-            aliases_file: Optional[pathlib.Path] = None,
-            use_certifi: bool = False) -> None:
+    def __init__(self, 
+                 config_file: Optional[pathlib.Path] = None, 
+                 perms_file: Optional[pathlib.Path] = None, 
+                 aliases_file: Optional[pathlib.Path] = None, 
+                 use_certifi: bool = False) -> None:
         
         intents = discord.Intents.all()
         intents.typing = False
         intents.presences = False
         
-        # super().__init__에서 command_prefix와 intents를 한 번만 전달합니다.
-        super().__init__(command_prefix='!', intents=intents)
+        super().__init__(command_prefix="!", intents=intents)
 
         log.info("Initializing MusicBot %s", BOTVERSION)
         load_opus_lib()
@@ -140,7 +138,7 @@ class MusicBot(commands.Bot):
         # 인스턴스 변수 초기화
         self._config_file = config_file or ConfigDefaults.options_file
         self._perms_file = perms_file or PermissionsDefaults.perms_file
-        self.aliases_file = aliases_file or AliasesDefault.aliases_file
+        self.aliases_file = aliases_file or AliasesDefault.aliases_file  # 기본값 설정
         self.use_certifi: bool = use_certifi
         self.exit_signal: ExitSignals = None
         self._init_time: float = time.time()
@@ -161,8 +159,9 @@ class MusicBot(commands.Bot):
         self.permissions.set_owner_id(self.config.owner_id)
         self.str = Json(self.config.i18n_file)
 
-        if self.config.usealias:
-            self.aliases = Aliases(aliases_file)
+        # `self.aliases_file`이 None이 아닌지 확인한 후 초기화
+        if self.config.usealias and self.aliases_file is not None:
+            self.aliases = Aliases(self.aliases_file)
 
         # Additional setups
         self.playlist_mgr = AutoPlaylistManager(self)
