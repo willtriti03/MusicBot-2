@@ -116,7 +116,7 @@ CommandResponse = Union[Response, None]
 
 
 log = logging.getLogger(__name__)
-
+bot = None
 # TODO:  add an aliases command to manage command aliases.
 # TODO:  maybe allow aliases to contain whole/partial commands.
 
@@ -181,6 +181,9 @@ class MusicBot(commands.Bot):
         # Spotify and session setup
         self.spotify: Optional[Spotify] = None
         self.session: Optional[aiohttp.ClientSession] = None
+
+        bot = self
+
 
 
     async def setup_hook(self) -> None:
@@ -4619,7 +4622,7 @@ class MusicBot(commands.Bot):
             ).format(self.server_data[guild.id].command_prefix),
             delete_after=30,
         )
-    @app_commands.command(name="소환", description="사용자의 음성 채널로 봇을 호출합니다.")
+    @bot.tree.command(name="소환", description="사용자의 음성 채널로 봇을 호출합니다.")
     async def cmd_summon(
         self, guild: discord.Guild, author: discord.Member, message: discord.Message
     ) -> CommandResponse:
