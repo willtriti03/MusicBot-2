@@ -24,7 +24,6 @@ import certifi  # type: ignore[import-untyped, unused-ignore]
 import discord
 import yt_dlp as youtube_dl  # type: ignore[import-untyped]
 
-from discord.ext import commands
 from . import downloader, exceptions
 from .aliases import Aliases, AliasesDefault
 from .autoplaylist import AutoPlaylistManager
@@ -119,27 +118,31 @@ log = logging.getLogger(__name__)
 # TODO:  maybe allow aliases to contain whole/partial commands.
 
 
-class MusicBot(commands.Bot):  # Using commands.Bot for Slash Command support
-    def __init__(self, 
-                 config_file: Optional[pathlib.Path] = None, 
-                 perms_file: Optional[pathlib.Path] = None, 
-                 aliases_file: Optional[pathlib.Path] = None, 
-                 use_certifi: bool = False) -> None:
-        # intents를 설정하여 super()로 한 번만 전달합니다.
-        intents = discord.Intents.all()
-        intents.typing = False
-        intents.presences = False
-
-        super().__init__(command_prefix="!", intents=intents)  # command_prefix와 함께 intents를 한 번만 전달
-
+class MusicBot(discord.Client):
+    def __init__(
+        self,
+        config_file: Optional[pathlib.Path] = None,
+        perms_file: Optional[pathlib.Path] = None,
+        aliases_file: Optional[pathlib.Path] = None,
+        use_certifi: bool = False,
+    ) -> None:
         log.info("Initializing MusicBot %s", BOTVERSION)
         load_opus_lib()
 
-        # 인스턴스 변수 초기화
-        self._config_file = config_file or ConfigDefaults.options_file
-        self._perms_file = perms_file or PermissionsDefaults.perms_file
-        self.aliases_file = aliases_file or AliasesDefault.aliases_file
-        self.use_certifi = use_certifi
+        if config_file is None:
+            self._config_file = ConfigDefaults.options_file
+        else:
+            self._config_file = config_file
+
+        if perms_file is None:
+            self._perms_file = PermissionsDefaults.perms_file
+        else:
+            self._perms_file = perms_file
+
+        if aliases_file is None:
+            aliases_file = AliasesDefault.aliases_file
+
+        self.use_certifi: bool = use_certifi
         self.exit_signal: ExitSignals = None
         self._init_time: float = time.time()
         self._os_signal: Optional[signal.Signals] = None
@@ -153,31 +156,38 @@ class MusicBot(commands.Bot):  # Using commands.Bot for Slash Command support
         self.last_status: Optional[discord.BaseActivity] = None
         self.players: Dict[int, MusicPlayer] = {}
 
-        # Configuration and permission settings
         self.config = Config(self._config_file)
+
         self.permissions = Permissions(self._perms_file)
+        # Set the owner ID in case it wasn't auto...
         self.permissions.set_owner_id(self.config.owner_id)
         self.str = Json(self.config.i18n_file)
 
         if self.config.usealias:
             self.aliases = Aliases(aliases_file)
 
-        # Additional setups
         self.playlist_mgr = AutoPlaylistManager(self)
+
         self.aiolocks: DefaultDict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.filecache = AudioFileCache(self)
         self.downloader = downloader.Downloader(self)
 
-        # Factory function for server-specific data
+        # Factory function for server specific data objects.
         def server_factory() -> GuildSpecificData:
             return GuildSpecificData(self)
 
-        # Defaultdict for GuildSpecificData
-        self.server_data: DefaultDict[int, GuildSpecificData] = defaultdict(server_factory)
+        # defaultdict lets us on-demand create GuildSpecificData.
+        self.server_data: DefaultDict[int, GuildSpecificData] = defaultdict(
+            server_factory
+        )
 
-        # Spotify and session setup
         self.spotify: Optional[Spotify] = None
         self.session: Optional[aiohttp.ClientSession] = None
+
+        intents = discord.Intents.all()
+        intents.typing = False
+        intents.presences = False
+        super().__init__(intents=intents)
 
     async def setup_hook(self) -> None:
         """async init phase that is called by d.py before login."""
@@ -4615,7 +4625,7 @@ class MusicBot(commands.Bot):  # Using commands.Bot for Slash Command support
             ).format(self.server_data[guild.id].command_prefix),
             delete_after=30,
         )
-
+    @commands.Bot.tree.command(name="summon", description="봇을 현재 채널에 소환합니다")
     async def cmd_summon(
         self, guild: discord.Guild, author: discord.Member, message: discord.Message
     ) -> CommandResponse:
