@@ -5058,15 +5058,17 @@ class MusicBot(commands.Bot):
             include_bots=self.config.bot_exception_ids,
         )
 
-        skips_remaining = (
-            min(
-                self.config.skips_required,
-                math.ceil(
-                    self.config.skip_ratio_required / (1 / num_voice)
-                ),  # Number of skips from config ratio
-            )
-            - num_skips
-        )
+        skips_remaining = 0
+        
+        #(
+        #    min(
+        #        self.config.skips_required,
+        #        math.ceil(
+        #            self.config.skip_ratio_required / (1 / num_voice)
+        #        ),  # Number of skips from config ratio
+        #    )
+        #    - num_skips
+        #)
 
         if skips_remaining <= 0:
             if not permissions.skip_looped and player.repeatsong:
