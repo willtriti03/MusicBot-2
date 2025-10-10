@@ -20,7 +20,12 @@ import discord
 
 from .constructs import Serializable
 from .entry import LocalFilePlaylistEntry, StreamPlaylistEntry, URLPlaylistEntry
-from .exceptions import ExtractionError, InvalidDataError, WrongEntryTypeError
+from .exceptions import (
+    ExtractionError,
+    InvalidDataError,
+    MusicbotException,
+    WrongEntryTypeError,
+)
 from .lib.event_emitter import EventEmitter
 
 if TYPE_CHECKING:
@@ -459,6 +464,12 @@ class Playlist(EventEmitter, Serializable):
 
         except ExtractionError as e:
             log.warning("Extraction failed for a playlist entry.%s", moving_on)
+            self.emit("entry-failed", entry=entry, error=e)
+            if not predownload:
+                return await self.get_next_entry()
+
+        except MusicbotException as e:
+            log.warning("Error preparing playlist entry.%s", moving_on)
             self.emit("entry-failed", entry=entry, error=e)
             if not predownload:
                 return await self.get_next_entry()
