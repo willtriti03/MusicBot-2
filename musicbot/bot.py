@@ -1386,7 +1386,12 @@ class MusicBot(commands.Bot):
         else:  # Don't serialize for autoplaylist events
             await self.serialize_queue(guild)
 
-        if not player.is_stopped and not player.is_dead:
+        if player.is_dead:
+            return
+
+        if player.is_stopped:
+            player.play()
+        else:
             player.play(_continue=True)
 
     async def _auto_queue_similar_track(
