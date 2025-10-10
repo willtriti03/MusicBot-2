@@ -3999,17 +3999,7 @@ class MusicBot(commands.Bot):
                 self._do_song_blocklist_check(info.url)
                 self._do_song_blocklist_check(info.title)
 
-                if (
-                    permissions.max_song_length
-                    and info.duration_td.seconds > permissions.max_song_length
-                ):
-                    raise exceptions.PermissionsError(
-                        self.str.get(
-                            "cmd-play-song-limit",
-                            "Song duration exceeds limit ({0} > {1})",
-                        ).format(info.duration, permissions.max_song_length),
-                        expire_in=30,
-                    )
+                # Duration limit disabled: do not block songs based on max_song_length.
 
                 entry, position = await player.playlist.add_entry_from_info(
                     info, channel=channel, author=author, head=head
