@@ -6048,7 +6048,7 @@ class MusicBot(commands.Bot):
             or self.config.owner_id == author.id
         )
 
-        def check(message: discord.Message) -> bool:
+        def check(message: discord.Message, **kwargs) -> bool:
             if is_possible_command_invoke(message) and delete_invokes:
                 return delete_all or message.author == author
             return message.author == self.user
