@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(venvScriptspython.exe:*)",
+      "Bash(.venvScriptspython.exe -c \"import discord; print(discord.__version__)\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
