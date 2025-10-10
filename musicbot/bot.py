@@ -4485,7 +4485,7 @@ class MusicBot(commands.Bot):
                 )
 
             # Check to verify that received message is valid.
-            def check(reply: discord.Message) -> bool:
+            def check(reply: discord.Message, **kwargs) -> bool:
                 return (
                     reply.channel.id == channel.id
                     and reply.author == message.author
