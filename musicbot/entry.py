@@ -731,6 +731,8 @@ class StreamPlaylistEntry(BasePlaylistEntry):
         """
         super().__init__()
 
+        self._start_time: Optional[float] = None
+        self._playback_rate: Optional[float] = None
         self.playlist: "Playlist" = playlist
         self.info: YtdlpResponseDict = info
 
@@ -789,6 +791,17 @@ class StreamPlaylistEntry(BasePlaylistEntry):
     def thumbnail_url(self) -> str:
         """Get available thumbnail from info or an empty string"""
         return self.info.thumbnail_url
+
+    @property
+    def playback_speed(self) -> float:
+        """Get the current playback speed if set, otherwise fallback to config default."""
+        if self._playback_rate is not None:
+            return self._playback_rate
+        return self.playlist.bot.config.default_speed or 1.0
+
+    def set_playback_speed(self, speed: float) -> None:
+        """Set playback speed for streaming entries."""
+        self._playback_rate = speed
 
     def __json__(self) -> Dict[str, Any]:
         return self._enclose_json(
