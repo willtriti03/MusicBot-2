@@ -1,6 +1,5 @@
 import asyncio
 import io
-import subprocess
 import json
 import logging
 import os
@@ -394,8 +393,6 @@ class MusicPlayer(EventEmitter, Serializable):
                         boptions += f" {entry.boptions}"
                 else:
                     aoptions = "-vn"
-                    # Improve resilience for streaming inputs by enabling ffmpeg reconnects
-                    boptions += " -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 
                 log.ffmpeg(  # type: ignore[attr-defined]
                     "Creating player with options: %s %s %s",
@@ -404,17 +401,16 @@ class MusicPlayer(EventEmitter, Serializable):
                     entry.filename,
                 )
 
-                # Create FFmpeg source with stderr piped so we can consume real diagnostics
-                ffmpeg_source = FFmpegPCMAudio(
-                    entry.filename,
-                    before_options=boptions,
-                    options=aoptions,
-                    stderr=subprocess.PIPE,
-                )
+                stderr_io = io.BytesIO()
 
                 self._source = SourcePlaybackCounter(
                     PCMVolumeTransformer(
-                        ffmpeg_source,
+                        FFmpegPCMAudio(
+                            entry.filename,
+                            before_options=boptions,
+                            options=aoptions,
+                            stderr=stderr_io,
+                        ),
                         self.volume,
                     ),
                     start_time=entry.start_time,
@@ -433,24 +429,13 @@ class MusicPlayer(EventEmitter, Serializable):
 
                 self._stderr_future = asyncio.Future()
 
-                # Obtain the actual stderr pipe from the ffmpeg process
-                try:
-                    stderr_pipe = ffmpeg_source._process.stderr  # type: ignore[attr-defined]
-                except Exception:
-                    stderr_pipe = None
+                stderr_thread = Thread(
+                    target=filter_stderr,
+                    args=(stderr_io, self._stderr_future),
+                    name="stderr reader",
+                )
 
-                if stderr_pipe is not None:
-                    stderr_thread = Thread(
-                        target=filter_stderr,
-                        args=(stderr_pipe, self._stderr_future),
-                        name="stderr reader",
-                    )
-
-                    stderr_thread.start()
-                else:
-                    # If we cannot attach to stderr, resolve the future successfully to avoid blocking error path
-                    if isinstance(self._stderr_future, asyncio.Future):
-                        self._stderr_future.set_result(True)
+                stderr_thread.start()
 
                 self.emit("play", player=self, entry=entry)
 

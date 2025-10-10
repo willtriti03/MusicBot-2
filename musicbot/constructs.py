@@ -87,7 +87,6 @@ class GuildSpecificData:
         ] = None
         self.autoplaylist: "AutoPlaylist" = self._bot.playlist_mgr.get_default()
         self.current_playing_url: str = ""
-        self.auto_similar_enabled: bool = False
 
         # create a task to load any persistent guild options.
         # in theory, this should work out fine.
@@ -243,10 +242,6 @@ class GuildSpecificData:
                 self.autoplaylist = self._bot.playlist_mgr.get_playlist(guild_playlist)
                 await self.autoplaylist.load()
 
-            auto_similar = options.get("auto_similar_enabled", None)
-            if isinstance(auto_similar, bool):
-                self.auto_similar_enabled = auto_similar
-
     async def save_guild_options_file(self) -> None:
         """
         Save server-specific options, like the command prefix, to a JSON
@@ -270,7 +265,6 @@ class GuildSpecificData:
         opt_dict = {
             "command_prefix": self._command_prefix,
             "auto_playlist": auto_playlist,
-            "auto_similar_enabled": self.auto_similar_enabled,
         }
 
         async with self._file_lock:
