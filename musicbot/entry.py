@@ -665,6 +665,17 @@ class URLPlaylistEntry(BasePlaylistEntry):
         Actually download the media in this entry into cache.
         """
         log.info("Download started:  %s", self.url)
+        notify_channel = self.channel
+        if isinstance(notify_channel, discord.abc.Messageable):
+            try:
+                song_name = self.title or self.url
+                await self.playlist.bot.safe_send_message(
+                    notify_channel,
+                    f"Downloading **{song_name}**...",
+                    expire_in=30 if self.playlist.bot.config.delete_messages else 0,
+                )
+            except Exception:  # pylint: disable=broad-exception-caught
+                log.debug("Failed to send download notification for %s", self.url, exc_info=True)
 
         retry = 2
         info = None
