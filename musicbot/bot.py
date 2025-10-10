@@ -5946,7 +5946,7 @@ class MusicBot(commands.Bot):
 
             if channel.permissions_for(guild.me).manage_messages:
                 deleted = await channel.purge(
-                    check=check, limit=search_range, before=message
+                    check=check, limit=search_range
                 )
                 return Response(
                     self.str.get(
