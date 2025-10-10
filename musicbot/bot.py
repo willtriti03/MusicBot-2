@@ -1162,7 +1162,9 @@ class MusicBot(commands.Bot):
         await self.update_now_playing_status()
         self.loop.create_task(self.handle_player_inactivity(player))
 
-    async def on_player_finished_playing(self, player: MusicPlayer, **_: Any) -> None:
+    async def on_player_finished_playing(
+        self, player: MusicPlayer, entry: EntryTypes, **_: Any
+    ) -> None:
         """
         Event called by MusicPlayer when playback has finished without error.
         """
@@ -1186,6 +1188,20 @@ class MusicBot(commands.Bot):
             if history is not None:
                 await history.add_track(last_played_url)
         self.server_data[guild.id].current_playing_url = ""
+
+        server_state = self.server_data[guild.id]
+        if (
+            server_state.auto_similar_enabled
+            and not player.playlist.entries
+            and not player.current_entry
+        ):
+            queued_similar = await self._auto_queue_similar_track(guild, player, entry)
+            if queued_similar:
+                log.debug(
+                    "Auto similar recommendation queued for guild %s after track '%s'",
+                    guild.id,
+                    entry.title,
+                )
 
         if not player.voice_client.is_connected():
             log.debug(
@@ -1372,6 +1388,76 @@ class MusicBot(commands.Bot):
 
         if not player.is_stopped and not player.is_dead:
             player.play(_continue=True)
+
+    async def _auto_queue_similar_track(
+        self,
+        guild: discord.Guild,
+        player: MusicPlayer,
+        finished_entry: EntryTypes,
+    ) -> bool:
+        """Attempt to queue a track related to the one that just finished."""
+        search_title = (finished_entry.title or "").strip()
+        if not search_title:
+            return False
+
+        search_query = f"ytsearch5:{search_title} audio"
+        try:
+            search_result = await self.downloader.extract_info(
+                search_query,
+                download=False,
+                process=True,
+            )
+        except (
+            exceptions.MusicbotException,
+            youtube_dl.utils.YoutubeDLError,
+        ) as exc:
+            log.debug("Auto similar search failed: %s", exc)
+            return False
+
+        if not search_result or not search_result.has_entries:
+            return False
+
+        original_url = getattr(finished_entry, "url", "")
+        candidates = search_result.get_entries_objects()
+
+        for candidate in candidates:
+            candidate_url = candidate.get_playable_url()
+            if original_url and candidate_url == original_url:
+                continue
+
+            try:
+                await player.playlist.add_entry_from_info(
+                    candidate,
+                    channel=None,
+                    author=None,
+                    head=False,
+                )
+            except (
+                exceptions.MusicbotException,
+                youtube_dl.utils.YoutubeDLError,
+                Exception,
+            ) as exc:  # pylint: disable=broad-exception-caught
+                log.debug("Auto similar candidate failed: %s", exc)
+                continue
+
+            notify_channel: Optional[MessageableChannel] = None
+            entry_channel = getattr(finished_entry, "channel", None)
+            if isinstance(entry_channel, discord.abc.Messageable):
+                notify_channel = entry_channel  # type: ignore[assignment]
+            elif self.server_data[guild.id].last_np_msg:
+                notify_channel = self.server_data[guild.id].last_np_msg.channel
+
+            if notify_channel:
+                auto_msg_title = candidate.title or candidate.url
+                await self.safe_send_message(
+                    notify_channel,
+                    f"Automatically queued a related track: **{auto_msg_title}**",
+                    expire_in=30,
+                )
+
+            return True
+
+        return False
 
     async def on_player_entry_added(
         self,
@@ -3073,6 +3159,42 @@ class MusicBot(commands.Bot):
             "\N{OK HAND SIGN} Karaoke mode is now "
             + ["disabled", "enabled"][player.karaoke_mode],
             delete_after=15,
+        )
+
+    async def cmd_autosimilar(
+        self, guild: discord.Guild, state: str = ""
+    ) -> CommandResponse:
+        """
+        Usage:
+            {command_prefix}autosimilar [on | off]
+
+        Toggle automatic recommendation of related tracks when the queue is empty.
+        """
+
+        server_state = self.server_data[guild.id]
+        prefix = server_state.command_prefix or self.config.command_prefix
+
+        normalized = state.lower()
+        desired: Optional[bool]
+        if normalized in ("on", "enable", "enabled", "true", "1", "yes"):
+            desired = True
+        elif normalized in ("off", "disable", "disabled", "false", "0", "no"):
+            desired = False
+        elif not normalized:
+            desired = not server_state.auto_similar_enabled
+        else:
+            raise exceptions.CommandError(
+                f"Invalid option, use {prefix}autosimilar on/off or leave blank to toggle.",
+                expire_in=30,
+            )
+
+        server_state.auto_similar_enabled = desired
+        await server_state.save_guild_options_file()
+
+        status_text = "enabled" if desired else "disabled"
+        return Response(
+            f"Auto similar recommendations are now {status_text}.",
+            delete_after=20,
         )
 
     async def _do_playlist_checks(
