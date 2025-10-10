@@ -309,6 +309,17 @@ class Config:
             getter="getpercent",
             comment="This percent of listeners must vote for skip. If SkipsRequired is lower it will be used instead.",
         )
+        self.prefer_stream: bool = self.register.init_option(
+            section="MusicBot",
+            option="PreferStream",
+            dest="prefer_stream",
+            default=ConfigDefaults.prefer_stream,
+            getter="getboolean",
+            comment=(
+                "Stream audio directly with ffmpeg instead of downloading it when possible. "
+                "Disable this if you rely on cached files or experience playback issues."
+            ),
+        )
         self.save_videos: bool = self.register.init_option(
             section="MusicBot",
             option="SaveVideos",
@@ -1125,6 +1136,7 @@ class ConfigDefaults:
     default_speed: float = 1.0
     skips_required: int = 4
     skip_ratio_required: float = 0.5
+    prefer_stream: bool = False
     save_videos: bool = True
     storage_retain_autoplay: bool = True
     storage_limit_bytes: int = 0

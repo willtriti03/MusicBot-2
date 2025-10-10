@@ -174,16 +174,30 @@ class Playlist(EventEmitter, Serializable):
                 defer_serialize=defer_serialize,
             )
 
-        # check if this is a stream, just in case.
-        if info.is_stream:
-            log.debug("Entry info appears to be a stream, adding stream entry...")
-            return await self.add_stream_from_info(
-                info,
-                author=author,
-                channel=channel,
-                head=head,
-                defer_serialize=defer_serialize,
-            )
+        prefer_stream = getattr(self.bot.config, "prefer_stream", False)
+        use_stream_entry = bool(info.is_stream or info.data.get("__force_stream"))
+        if not use_stream_entry and prefer_stream:
+            protocol = str(info.data.get("protocol", "") or "").lower()
+            url = info.url or ""
+            if url.startswith(("http://", "https://")):
+                use_stream_entry = True
+            elif protocol:
+                streamable_protocols = {
+                    "http",
+                    "https",
+                    "m3u8",
+                    "m3u8_native",
+                    "http_dash_segments",
+                    "hls",
+                    "dash",
+                    "rtmp",
+                    "rtsp",
+                    "mms",
+                }
+                if protocol in streamable_protocols or protocol.startswith(
+                    ("http", "m3u8", "hls", "dash", "rtmp", "rtsp")
+                ):
+                    use_stream_entry = True
 
         # TODO: Extract this to its own function
         if info.extractor in ["generic", "Dropbox"]:
@@ -203,7 +217,7 @@ class Playlist(EventEmitter, Serializable):
                     log.warning(
                         "Got text/html for content-type, this might be a stream."
                     )
-                    return await self.add_stream_from_info(info, head=head)
+                    use_stream_entry = True
                     # TODO: Check for shoutcast/icecast
 
                 elif not content_type.startswith(("audio/", "video/")):
@@ -212,6 +226,16 @@ class Playlist(EventEmitter, Serializable):
                         content_type,
                         info.url,
                     )
+
+        if use_stream_entry:
+            log.debug("Using stream playback for entry: %s", info.get("__input_subject"))
+            return await self.add_stream_from_info(
+                info,
+                author=author,
+                channel=channel,
+                head=head,
+                defer_serialize=defer_serialize,
+            )
 
         log.noise(  # type: ignore[attr-defined]
             f"Adding URLPlaylistEntry for: {info.get('__input_subject')}"
