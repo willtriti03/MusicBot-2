@@ -3,12 +3,13 @@ import inspect
 import json
 import logging
 import pydoc
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     DefaultDict,
+    Deque,
     Dict,
     List,
     Optional,
@@ -88,6 +89,7 @@ class GuildSpecificData:
         self.autoplaylist: "AutoPlaylist" = self._bot.playlist_mgr.get_default()
         self.current_playing_url: str = ""
         self.auto_similar_enabled: bool = False
+        self.auto_similar_history: Deque[str] = deque(maxlen=10)
 
         # create a task to load any persistent guild options.
         # in theory, this should work out fine.

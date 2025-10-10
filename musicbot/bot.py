@@ -1401,6 +1401,8 @@ class MusicBot(commands.Bot):
         finished_entry: EntryTypes,
     ) -> bool:
         """Attempt to queue a track related to the one that just finished."""
+        server_state = self.server_data[guild.id]
+
         search_title = (finished_entry.title or "").strip()
         if not search_title:
             return False
@@ -1425,8 +1427,62 @@ class MusicBot(commands.Bot):
         original_url = getattr(finished_entry, "url", "")
         candidates = search_result.get_entries_objects()
 
+        # Shuffle to vary selection order and avoid bias toward the first search result.
+        random.shuffle(candidates)
+
+        seen_url_keys: Set[str] = set()
+        seen_video_ids: Set[str] = set()
+
+        def register_url(url: Optional[str]) -> None:
+            if isinstance(url, str) and url:
+                seen_url_keys.add(url.lower())
+
+        def register_info(info_obj: Optional["downloader.YtdlpResponseDict"]) -> None:
+            if not info_obj:
+                return
+            register_url(info_obj.url)
+            register_url(info_obj.webpage_url)
+            register_url(info_obj.original_url)
+            vid = info_obj.video_id
+            if vid:
+                seen_video_ids.add(vid.lower())
+
+        register_url(original_url)
+        register_info(getattr(finished_entry, "info", None))
+
+        for queued_entry in player.playlist.entries:
+            register_url(getattr(queued_entry, "url", None))
+            register_info(getattr(queued_entry, "info", None))
+
+        if player.current_entry:
+            register_url(getattr(player.current_entry, "url", None))
+            register_info(getattr(player.current_entry, "info", None))
+
+        register_url(server_state.last_played_song_subject)
+        register_url(server_state.current_playing_url)
+        for hist_item in server_state.auto_similar_history:
+            register_url(hist_item)
+
         for candidate in candidates:
             candidate_url = candidate.get_playable_url()
+            candidate_video_id = candidate.video_id.lower() if candidate.video_id else ""
+
+            candidate_urls = {
+                candidate_url,
+                candidate.url,
+                candidate.webpage_url,
+                candidate.original_url,
+            }
+
+            if candidate_video_id and candidate_video_id in seen_video_ids:
+                continue
+
+            if any(
+                isinstance(url, str) and url and url.lower() in seen_url_keys
+                for url in candidate_urls
+            ):
+                continue
+
             if original_url and candidate_url == original_url:
                 continue
 
@@ -1459,6 +1515,10 @@ class MusicBot(commands.Bot):
                     f"Automatically queued a related track: **{auto_msg_title}**",
                     expire_in=30,
                 )
+
+            history_key = candidate_video_id or (candidate_url or candidate.title or "")
+            if history_key:
+                server_state.auto_similar_history.append(history_key)
 
             return True
 
