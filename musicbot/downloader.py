@@ -338,6 +338,7 @@ class Downloader:
         """
         log.noise(f"Called extract_info with:  '{song_subject}', {args}, {kwargs}")  # type: ignore[attr-defined]
         as_stream_url = kwargs.pop("as_stream", False)
+        extra_info = kwargs.pop("extra_info", {})
 
         # check if loop is closed and exit.
         if (self.bot.loop and self.bot.loop.is_closed()) or not self.bot.loop:
@@ -380,7 +381,7 @@ class Downloader:
             data = await self.bot.loop.run_in_executor(
                 self.thread_pool,
                 functools.partial(
-                    self.unsafe_ytdl.extract_info, song_subject, *args, **kwargs
+                    self.unsafe_ytdl.extract_info, song_subject, extra_info=extra_info, *args, **kwargs
                 ),
             )
         except DownloadError as e:
