@@ -296,18 +296,7 @@ class Playlist(EventEmitter, Serializable):
                 baditems += 1
                 continue
 
-            # Exclude entries over max permitted duration.
-            if (
-                author_perms
-                and author_perms.max_song_length
-                and item.duration > author_perms.max_song_length
-            ):
-                log.debug(
-                    "Ignoring song in entries by '%s', duration longer than permitted maximum.",
-                    author,
-                )
-                baditems += 1
-                continue
+            # Duration limit disabled: do not exclude entries based on max_song_length.
 
             # Check youtube data to preemptively avoid adding Private or Deleted videos to the queue.
             if info.extractor.startswith("youtube") and (

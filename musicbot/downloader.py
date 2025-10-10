@@ -59,7 +59,8 @@ ytdl_format_options_immutable = MappingProxyType(
 
 
 # Fuck your useless bugreports message that gets two link embeds and confuses users
-youtube_dl.utils.bug_reports_message = lambda: ""
+# Accept *args/**kwargs to remain compatible with newer yt-dlp versions that pass keyword arguments.
+youtube_dl.utils.bug_reports_message = lambda *_, **__: ""
 
 """
     Alright, here's the problem.  To catch youtube-dl errors for their useful information, I have to
@@ -338,7 +339,6 @@ class Downloader:
         """
         log.noise(f"Called extract_info with:  '{song_subject}', {args}, {kwargs}")  # type: ignore[attr-defined]
         as_stream_url = kwargs.pop("as_stream", False)
-        extra_info = kwargs.pop("extra_info", {})
 
         # check if loop is closed and exit.
         if (self.bot.loop and self.bot.loop.is_closed()) or not self.bot.loop:
@@ -381,7 +381,7 @@ class Downloader:
             data = await self.bot.loop.run_in_executor(
                 self.thread_pool,
                 functools.partial(
-                    self.unsafe_ytdl.extract_info, song_subject, extra_info=extra_info, *args, **kwargs
+                    self.unsafe_ytdl.extract_info, song_subject, *args, **kwargs
                 ),
             )
         except DownloadError as e:
