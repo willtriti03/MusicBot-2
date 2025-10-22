@@ -3418,12 +3418,9 @@ class MusicBot(commands.Bot):
         if player and player.voice_client and player.voice_client.channel:
             pvc = player.voice_client.channel
             avc = author.voice.channel
-            perms = self.permissions.for_user(author)
-            if pvc != avc and perms.summonplay:
+            # Permission check removed - all users can auto-summon
+            if pvc != avc:
                 await self.cmd_summon(author.guild, author, message)
-                return
-
-            if pvc != avc and not perms.summonplay:
                 return
 
         if player and player.is_paused:
@@ -3983,7 +3980,8 @@ class MusicBot(commands.Bot):
 
         await channel.typing()
 
-        if not player and permissions.summonplay and channel.guild:
+        # Permission check removed - all users can auto-summon
+        if not player and channel.guild:
             response = await self.cmd_summon(channel.guild, author, message)
             if response:
                 if self.config.embeds:
@@ -4265,7 +4263,8 @@ class MusicBot(commands.Bot):
 
         if _player:
             player = _player
-        elif permissions.summonplay:
+        else:
+            # Permission check removed - all users can auto-summon
             response = await self.cmd_summon(guild, author, message)
             if response:
                 if self.config.embeds:
@@ -5026,41 +5025,33 @@ class MusicBot(commands.Bot):
 
         if user_mentions:
             for user in user_mentions:
-                if permissions.remove or author == user:
-                    try:
-                        entry_indexes = [
-                            e for e in player.playlist.entries if e.author == user
-                        ]
-                        for entry in entry_indexes:
-                            player.playlist.entries.remove(entry)
-                        entry_text = f"{len(entry_indexes)} item"
-                        if len(entry_indexes) > 1:
-                            entry_text += "s"
-                        return Response(
-                            self.str.get(
-                                "cmd-remove-reply", "Removed `{0}` added by `{1}`"
-                            )
-                            .format(entry_text, user.name)
-                            .strip()
+                # Permission check removed - all users can remove entries
+                try:
+                    entry_indexes = [
+                        e for e in player.playlist.entries if e.author == user
+                    ]
+                    for entry in entry_indexes:
+                        player.playlist.entries.remove(entry)
+                    entry_text = f"{len(entry_indexes)} item"
+                    if len(entry_indexes) > 1:
+                        entry_text += "s"
+                    return Response(
+                        self.str.get(
+                            "cmd-remove-reply", "Removed `{0}` added by `{1}`"
                         )
+                        .format(entry_text, user.name)
+                        .strip()
+                    )
 
-                    except ValueError as e:
-                        raise exceptions.CommandError(
-                            self.str.get(
-                                "cmd-remove-missing",
-                                "Nothing found in the queue from user `%s`",
-                            )
-                            % user.name,
-                            expire_in=20,
-                        ) from e
-
-                raise exceptions.PermissionsError(
-                    self.str.get(
-                        "cmd-remove-noperms",
-                        "You do not have the valid permissions to remove that entry from the queue, make sure you're the one who queued it or have instant skip permissions",
-                    ),
-                    expire_in=20,
-                )
+                except ValueError as e:
+                    raise exceptions.CommandError(
+                        self.str.get(
+                            "cmd-remove-missing",
+                            "Nothing found in the queue from user `%s`",
+                        )
+                        % user.name,
+                        expire_in=20,
+                    ) from e
 
         if not index:
             idx = len(player.playlist.entries)
@@ -5085,32 +5076,21 @@ class MusicBot(commands.Bot):
                 expire_in=20,
             )
 
-        if (
-            permissions.remove
-            or author == player.playlist.get_entry_at_index(idx - 1).author
-        ):
-            entry = player.playlist.delete_entry_at_index((idx - 1))
-            if entry.channel and entry.author:
-                return Response(
-                    self.str.get(
-                        "cmd-remove-reply-author", "Removed entry `{0}` added by `{1}`"
-                    )
-                    .format(entry.title, entry.author.name)
-                    .strip()
-                )
-
+        # Permission check removed - all users can remove entries
+        entry = player.playlist.delete_entry_at_index((idx - 1))
+        if entry.channel and entry.author:
             return Response(
-                self.str.get("cmd-remove-reply-noauthor", "Removed entry `{0}`")
-                .format(entry.title)
+                self.str.get(
+                    "cmd-remove-reply-author", "Removed entry `{0}` added by `{1}`"
+                )
+                .format(entry.title, entry.author.name)
                 .strip()
             )
 
-        raise exceptions.PermissionsError(
-            self.str.get(
-                "cmd-remove-noperms",
-                "You do not have the valid permissions to remove that entry from the queue, make sure you're the one who queued it or have instant skip permissions",
-            ),
-            expire_in=20,
+        return Response(
+            self.str.get("cmd-remove-reply-noauthor", "Removed entry `{0}`")
+            .format(entry.title)
+            .strip()
         )
 
     async def cmd_skip(
@@ -5128,7 +5108,7 @@ class MusicBot(commands.Bot):
             {command_prefix}skip [force/f]
 
         Skips the current song when enough votes are cast.
-        Owners and those with the instaskip permission can add 'force' or 'f' after the command to force skip.
+        Anyone can add 'force' or 'f' after the command to force skip.
         """
 
         if player.is_stopped:
@@ -5169,24 +5149,11 @@ class MusicBot(commands.Bot):
         if entry_author:
             entry_author_id = entry_author.id
 
-        permission_force_skip = permissions.instaskip or (
-            self.config.allow_author_skip and author.id == entry_author_id
-        )
+        # Permission check removed - all users can skip
         force_skip = param.lower() in ["force", "f"]
 
-        if permission_force_skip and (force_skip or self.config.legacy_skip):
-            if (
-                not permission_force_skip
-                and not permissions.skip_looped
-                and player.repeatsong
-            ):
-                raise exceptions.PermissionsError(
-                    self.str.get(
-                        "cmd-skip-force-noperms-looped-song",
-                        "You do not have permission to force skip a looped song.",
-                    )
-                )
-
+        # Allow force skip for everyone
+        if force_skip or self.config.legacy_skip:
             # handle history playlist updates.
             if (
                 self.config.enable_queue_history_global
@@ -5203,15 +5170,6 @@ class MusicBot(commands.Bot):
                 ),
                 reply=True,
                 delete_after=30,
-            )
-
-        if not permission_force_skip and force_skip:
-            raise exceptions.PermissionsError(
-                self.str.get(
-                    "cmd-skip-force-noperms",
-                    "You do not have permission to force skip.",
-                ),
-                expire_in=30,
             )
 
         # get the number of users in the channel who are not deaf, exclude bots with exceptions.
@@ -5248,14 +5206,7 @@ class MusicBot(commands.Bot):
         #)
 
         if skips_remaining <= 0:
-            if not permissions.skip_looped and player.repeatsong:
-                raise exceptions.PermissionsError(
-                    self.str.get(
-                        "cmd-skip-vote-noperms-looped-song",
-                        "You do not have permission to skip a looped song.",
-                    )
-                )
-
+            # Permission check removed - all users can skip looped songs
             if player.repeatsong:
                 player.repeatsong = False
 
@@ -5286,14 +5237,7 @@ class MusicBot(commands.Bot):
             )
 
         # TODO: When a song gets skipped, delete the old x needed to skip messages
-        if not permissions.skip_looped and player.repeatsong:
-            raise exceptions.PermissionsError(
-                self.str.get(
-                    "cmd-skip-vote-noperms-looped-song",
-                    "You do not have permission to skip a looped song.",
-                )
-            )
-
+        # Permission check removed - all users can skip looped songs
         if player.repeatsong:
             player.repeatsong = False
         return Response(
