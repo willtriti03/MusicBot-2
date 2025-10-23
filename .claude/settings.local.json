@@ -3,7 +3,9 @@
     "allow": [
       "Bash(python:*)",
       "Bash(venvScriptspython.exe:*)",
-      "Bash(.venvScriptspython.exe -c \"import discord; print(discord.__version__)\")"
+      "Bash(.venvScriptspython.exe -c \"import discord; print(discord.__version__)\")",
+      "Bash(.venvScriptspython.exe -m pip install --upgrade yt-dlp)",
+      "Bash(powershell:*)"
     ],
     "deny": [],
     "ask": []
