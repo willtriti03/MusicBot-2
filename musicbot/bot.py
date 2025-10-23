@@ -7439,7 +7439,8 @@ class MusicBot(commands.Bot):
                     params.pop(key)
 
             # Test non-owners for command permissions.
-            if message.author.id != self.config.owner_id:
+            # Skip permission check for summon, skip, and remove commands
+            if message.author.id != self.config.owner_id and command not in ['summon', 'skip', 'remove']:
                 user_permissions.can_use_command(command)
 
             # Invalid usage, return docstring
