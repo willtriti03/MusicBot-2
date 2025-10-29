@@ -7395,28 +7395,6 @@ class MusicBot(commands.Bot):
         if message.author.bot and message.author.id not in self.config.bot_exception_ids:
             return
 
-        # Voice command detection - check before prefix check
-        message_content = message.content.strip()
-        if self.voice_parser.is_voice_command(message_content):
-            log.info(f"Detected voice command: {message_content}")
-            parsed = self.voice_parser.parse_command(message_content)
-
-            if parsed:
-                command_name, args_str = parsed
-                # Convert voice command to standard bot command format
-                command_prefix = self.config.command_prefix if not message.channel.guild else self.server_data[message.channel.guild.id].command_prefix
-
-                # Create a new message content with the command prefix
-                if args_str:
-                    new_content = f"{command_prefix}{command_name} {args_str}"
-                else:
-                    new_content = f"{command_prefix}{command_name}"
-
-                # Replace the message content and continue processing
-                message.content = new_content
-                message_content = new_content
-                log.info(f"Converted voice command to: {new_content}")
-
         self_mention = "<@MusicBot>"  # placeholder
         if self.user:
             self_mention = f"<@{self.user.id}>"
@@ -7426,6 +7404,29 @@ class MusicBot(commands.Bot):
         else:
             command_prefix = self.config.command_prefix
         message_content = message.content.strip()
+        
+        # Voice command detection - only check if message doesn't start with prefix
+        # 일반 prefix 명령어가 아닌 경우에만 음성 명령어 체크
+        if not message_content.startswith(command_prefix) and (
+            not self.config.commands_via_mention or not message_content.startswith(self_mention)
+        ):
+            if self.voice_parser.is_voice_command(message_content):
+                log.info(f"Detected voice command: {message_content}")
+                parsed = self.voice_parser.parse_command(message_content)
+
+                if parsed:
+                    command_name, args_str = parsed
+                    # Convert voice command to standard bot command format
+                    # Create a new message content with the command prefix
+                    if args_str:
+                        new_content = f"{command_prefix}{command_name} {args_str}"
+                    else:
+                        new_content = f"{command_prefix}{command_name}"
+
+                    # Replace the message content and continue processing
+                    message.content = new_content
+                    message_content = new_content
+                    log.info(f"Converted voice command to: {new_content}")
         # if the prefix is an emoji, silently remove the space often auto-inserted after it.
         # this regex will get us close enough to knowing if an unicode emoji is in the prefix...
         emoji_regex = re.compile(r"^(<a?:.+:\d+>|:.+:|[^ -~]+)$")
