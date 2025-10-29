@@ -24,3 +24,4 @@ media/
 
 docker-compose.yml
 config/autoplaylist.cachemap.json
+.env
