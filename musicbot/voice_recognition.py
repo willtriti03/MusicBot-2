@@ -16,6 +16,19 @@ from collections import deque
 
 log = logging.getLogger(__name__)
 
+# discord.sinks 호환성 처리
+try:
+    from discord.sinks import Sink as DiscordSink
+except (ImportError, AttributeError):
+    # discord.sinks가 없으면 기본 클래스 사용
+    class DiscordSink:
+        """discord.sinks.Sink의 대체 클래스"""
+        def __init__(self):
+            pass
+
+        def cleanup(self):
+            pass
+
 
 class VoiceRecognitionHandler:
     """
@@ -200,7 +213,7 @@ class VoiceRecognitionHandler:
         return False
 
 
-class RealtimeAudioSink(discord.sinks.Sink):
+class RealtimeAudioSink(DiscordSink):
     """
     Discord 음성 채널에서 오디오를 실시간으로 수신하는 Sink
     """
