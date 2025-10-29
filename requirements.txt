@@ -6,3 +6,6 @@ colorlog
 cffi --only-binary all; sys_platform == 'win32'
 certifi
 configupdater
+SpeechRecognition>=3.10.0
+PyAudio>=0.2.11
+python-dotenv>=1.0.0

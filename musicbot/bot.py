@@ -29,6 +29,8 @@ from . import downloader, exceptions
 from .aliases import Aliases, AliasesDefault
 from .autoplaylist import AutoPlaylistManager
 from .config import Config, ConfigDefaults
+from .voice_commands import VoiceCommandParser, load_bot_name_from_env
+from .voice_recognition import VoiceRecognitionHandler, VoiceListener
 from .constants import (
     DATA_FILE_SERVERS,
     DATA_GUILD_FILE_CUR_SONG,
@@ -179,6 +181,16 @@ class MusicBot(commands.Bot):
         # Spotify and session setup
         self.spotify: Optional[Spotify] = None
         self.session: Optional[aiohttp.ClientSession] = None
+
+        # Voice command parser setup
+        bot_name = load_bot_name_from_env()
+        self.voice_parser = VoiceCommandParser(bot_name)
+        log.info(f"Voice command parser initialized with bot name: {bot_name}")
+
+        # Voice recognition setup
+        self.voice_recognition_handler = VoiceRecognitionHandler(bot_name)
+        self.voice_listener = VoiceListener(self, self.voice_recognition_handler)
+        log.info("Voice recognition handler and listener initialized")
 
 
     async def setup_hook(self) -> None:
@@ -4848,6 +4860,94 @@ class MusicBot(commands.Bot):
             delete_after=30,
         )
 
+    async def cmd_listen(
+        self, guild: discord.Guild, channel: MessageableChannel, author: discord.Member
+    ) -> CommandResponse:
+        """
+        Usage:
+            {command_prefix}listen
+
+        Start listening for voice commands in the voice channel.
+        The bot will listen for its name and respond to voice commands.
+        """
+        # 사용자가 음성 채널에 있는지 확인
+        if not author.voice or not author.voice.channel:
+            raise exceptions.CommandError(
+                "You must be in a voice channel to use this command!"
+            )
+
+        # 봇이 음성 채널에 있는지 확인
+        voice_client = guild.voice_client
+        if not voice_client or not voice_client.is_connected():
+            raise exceptions.CommandError(
+                "Bot must be in a voice channel! Use !summon first."
+            )
+
+        # 이미 듣고 있는지 확인
+        if self.voice_listener.is_listening(guild.id):
+            return Response(
+                "Already listening for voice commands! 🎤",
+                delete_after=20
+            )
+
+        # 음성 듣기 시작
+        try:
+            await self.voice_listener.start_listening(voice_client, channel)
+            log.info(f"Started voice listening in guild {guild.id}")
+
+            return Response(
+                f"Started listening for voice commands! Say '{self.voice_recognition_handler.bot_name}' to get my attention. 🎤\n"
+                f"Example: '{self.voice_recognition_handler.bot_name} 재생 노래제목'",
+                delete_after=30
+            )
+        except Exception as e:
+            log.error(f"Error starting voice listening: {e}", exc_info=True)
+            raise exceptions.CommandError(
+                f"Failed to start voice listening: {str(e)}"
+            )
+
+    async def cmd_stoplisten(
+        self, guild: discord.Guild, channel: MessageableChannel
+    ) -> CommandResponse:
+        """
+        Usage:
+            {command_prefix}stoplisten
+
+        Stop listening for voice commands in the voice channel.
+        """
+        # 듣고 있는지 확인
+        if not self.voice_listener.is_listening(guild.id):
+            return Response(
+                "Not currently listening for voice commands.",
+                delete_after=20
+            )
+
+        # 봇이 음성 채널에 있는지 확인
+        voice_client = guild.voice_client
+        if not voice_client:
+            # 듣기 상태만 정리
+            if guild.id in self.voice_listener.active_sinks:
+                del self.voice_listener.active_sinks[guild.id]
+            return Response(
+                "Stopped listening (bot not in voice channel).",
+                delete_after=20
+            )
+
+        # 음성 듣기 중지
+        try:
+            await self.voice_listener.stop_listening(voice_client)
+            log.info(f"Stopped voice listening in guild {guild.id}")
+
+            return Response(
+                "Stopped listening for voice commands. 🔇",
+                delete_after=20
+            )
+        except Exception as e:
+            log.error(f"Error stopping voice listening: {e}", exc_info=True)
+            raise exceptions.CommandError(
+                f"Failed to stop voice listening: {str(e)}"
+            )
+
     async def cmd_follow(
         self,
         guild: discord.Guild,
@@ -7187,6 +7287,35 @@ class MusicBot(commands.Bot):
             log.debug("Got a message with no channel, somehow:  %s", message)
             return
 
+        # Check if message author is the bot itself or another bot (before other checks)
+        if message.author == self.user:
+            return
+
+        if message.author.bot and message.author.id not in self.config.bot_exception_ids:
+            return
+
+        # Voice command detection - check before prefix check
+        message_content = message.content.strip()
+        if self.voice_parser.is_voice_command(message_content):
+            log.info(f"Detected voice command: {message_content}")
+            parsed = self.voice_parser.parse_command(message_content)
+
+            if parsed:
+                command_name, args_str = parsed
+                # Convert voice command to standard bot command format
+                command_prefix = self.config.command_prefix if not message.channel.guild else self.server_data[message.channel.guild.id].command_prefix
+
+                # Create a new message content with the command prefix
+                if args_str:
+                    new_content = f"{command_prefix}{command_name} {args_str}"
+                else:
+                    new_content = f"{command_prefix}{command_name}"
+
+                # Replace the message content and continue processing
+                message.content = new_content
+                message_content = new_content
+                log.info(f"Converted voice command to: {new_content}")
+
         self_mention = "<@MusicBot>"  # placeholder
         if self.user:
             self_mention = f"<@{self.user.id}>"
@@ -7208,17 +7337,6 @@ class MusicBot(commands.Bot):
             self.config.commands_via_mention
             and not message_content.startswith(self_mention)
         ):
-            return
-
-        if message.author == self.user:
-            log.warning("Ignoring command from myself (%s)", message.content)
-            return
-
-        if (
-            message.author.bot
-            and message.author.id not in self.config.bot_exception_ids
-        ):
-            log.warning("Ignoring command from other bot (%s)", message.content)
             return
 
         if (not isinstance(message.channel, discord.abc.GuildChannel)) and (
