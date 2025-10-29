@@ -5,7 +5,8 @@
       "Bash(venvScriptspython.exe:*)",
       "Bash(.venvScriptspython.exe -c \"import discord; print(discord.__version__)\")",
       "Bash(.venvScriptspython.exe -m pip install --upgrade yt-dlp)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Read(//c/Users/willt/AppData/Roaming/Python/Python39/site-packages/discord/**)"
     ],
     "deny": [],
     "ask": []

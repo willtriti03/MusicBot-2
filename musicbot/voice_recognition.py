@@ -6,28 +6,30 @@ Discord 음성 채널에서 음성을 실시간으로 인식하고 명령어를 
 import os
 import asyncio
 import logging
-from typing import Optional, Callable, Dict
+import inspect
+from typing import Optional, Callable, Dict, List, Any
 import discord
 import speech_recognition as sr
 from io import BytesIO
 import wave
 import time
 from collections import deque
+import aiohttp
 
 log = logging.getLogger(__name__)
 
-# discord.sinks 호환성 처리
-try:
-    from discord.sinks import Sink as DiscordSink
-except (ImportError, AttributeError):
-    # discord.sinks가 없으면 기본 클래스 사용
-    class DiscordSink:
-        """discord.sinks.Sink의 대체 클래스"""
-        def __init__(self):
-            pass
+# discord.sinks import (py-cord 2.4.0+ 필요)
+from discord.sinks import Sink as DiscordSink
 
-        def cleanup(self):
-            pass
+# .env 파일에서 환경 변수 로드
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# 웹훅 URL 로드
+WEBHOOK_URL = os.getenv("TEXT_WEBHOOK", "")
 
 
 class VoiceRecognitionHandler:
@@ -45,11 +47,12 @@ class VoiceRecognitionHandler:
         self.is_listening = False
         self.command_callbacks: Dict[str, Callable] = {}
 
-        # 음성 인식 설정 - 더 민감하게 조정
-        self.recognizer.energy_threshold = 200  # 배경 소음 감지 임계값 (낮출수록 더 민감)
+        # 음성 인식 설정 - 문장 단위로 인식하도록 조정
+        self.recognizer.energy_threshold = 300  # 배경 소음 감지 임계값
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.pause_threshold = 0.5  # 말이 끝난 것으로 판단하는 침묵 시간 (짧게)
-        self.recognizer.phrase_threshold = 0.2  # 말을 시작했다고 판단하는 시간 (짧게)
+        self.recognizer.pause_threshold = 0.9  # 말이 끝난 것으로 판단하는 침묵 시간 (0.9초)
+        self.recognizer.phrase_threshold = 0.3  # 말을 시작했다고 판단하는 시간
+        self.recognizer.non_speaking_duration = 0.8  # 침묵으로 판단하는 시간
 
         log.info(f"VoiceRecognitionHandler initialized with bot_name: {bot_name}")
 
@@ -58,7 +61,7 @@ class VoiceRecognitionHandler:
         음성 명령어와 콜백 함수를 등록합니다.
 
         Args:
-            command: 음성 명령어 (예: "재생", "일시정지")
+            command: 음성 명령어 (예: "!재생", "일시정지")
             callback: 명령어가 인식되었을 때 실행할 함수
         """
         self.command_callbacks[command.lower()] = callback
@@ -101,6 +104,11 @@ class VoiceRecognitionHandler:
             )
 
             log.info(f"✅ Recognized speech: {text}")
+
+            # 웹훅으로 전송
+            if WEBHOOK_URL:
+                asyncio.create_task(self._send_to_webhook(text))
+
             return text.lower()
 
         except sr.UnknownValueError:
@@ -112,6 +120,27 @@ class VoiceRecognitionHandler:
         except Exception as e:
             log.debug(f"Error processing audio chunk: {e}")
             return None
+
+    async def _send_to_webhook(self, text: str):
+        """
+        인식된 텍스트를 웹훅으로 전송합니다.
+
+        Args:
+            text: 인식된 텍스트
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                data = {
+                    "content": f"🎤 **음성 인식**: {text}",
+                    "username": "!음성 인식 로그"
+                }
+                async with session.post(WEBHOOK_URL, json=data) as resp:
+                    if resp.status == 204:
+                        log.debug(f"Webhook sent successfully: {text}")
+                    else:
+                        log.warning(f"Webhook failed with status {resp.status}")
+        except Exception as e:
+            log.debug(f"Error sending webhook: {e}")
 
     def parse_command(self, text: str) -> Optional[tuple]:
         """
@@ -141,37 +170,37 @@ class VoiceRecognitionHandler:
 
         # 명령어 매핑
         command_map = {
-            "재생": "play",
-            "플레이": "play",
-            "틀어줘": "play",
-            "들려줘": "play",
-            "일시정지": "pause",
-            "멈춰": "pause",
-            "정지": "pause",
-            "다시재생": "resume",
-            "계속": "resume",
-            "다시": "resume",
-            "스킵": "skip",
-            "건너뛰기": "skip",
-            "넘겨": "skip",
-            "다음": "skip",
-            "큐": "queue",
-            "대기열": "queue",
-            "목록": "queue",
-            "지금재생": "np",
-            "현재곡": "np",
-            "지금곡": "np",
-            "볼륨": "volume",
-            "음량": "volume",
-            "소리": "volume",
-            "셔플": "shuffle",
-            "섞기": "shuffle",
-            "반복": "repeat",
-            "리피트": "repeat",
-            "나와": "disconnect",
-            "종료": "disconnect",
-            "끊어": "disconnect",
-            "그만": "disconnect",
+            "재생": "!play",
+            "플레이": "!play",
+            "틀어줘": "!play",
+            "들려줘": "!play",
+            "일시정지": "!pause",
+            "멈춰": "!pause",
+            "정지": "!pause",
+            "다시재생": "!resume",
+            "계속": "!resume",
+            "다시": "!resume",
+            "스킵": "!skip",
+            "건너뛰기": "!skip",
+            "넘겨": "!skip",
+            "다음": "!skip",
+            "큐": "!queue",
+            "대기열": "!queue",
+            "목록": "!queue",
+            "지금재생": "!np",
+            "현재곡": "!np",
+            "지금곡": "!np",
+            "볼륨": "!volume",
+            "음량": "!volume",
+            "소리": "!volume",
+            "셔플": "!shuffle",
+            "섞기": "!shuffle",
+            "반복": "!repeat",
+            "리피트": "!repeat",
+            "나와": "!disconnect",
+            "종료": "!disconnect",
+            "끊어": "!disconnect",
+            "그만": "!disconnect",
         }
 
         # 명령어 찾기 (가장 긴 매칭 우선)
@@ -212,6 +241,47 @@ class VoiceRecognitionHandler:
 
         return False
 
+    def update_settings(self, **kwargs):
+        """
+        음성 인식 설정을 업데이트합니다.
+
+        Args:
+            energy_threshold: 배경 소음 감지 임계값
+            pause_threshold: 말이 끝난 것으로 판단하는 침묵 시간
+            phrase_threshold: 말을 시작했다고 판단하는 시간
+            non_speaking_duration: 침묵으로 판단하는 시간
+        """
+        if 'energy_threshold' in kwargs:
+            self.recognizer.energy_threshold = kwargs['energy_threshold']
+            log.info(f"Updated energy_threshold to {kwargs['energy_threshold']}")
+
+        if 'pause_threshold' in kwargs:
+            self.recognizer.pause_threshold = kwargs['pause_threshold']
+            log.info(f"Updated pause_threshold to {kwargs['pause_threshold']}")
+
+        if 'phrase_threshold' in kwargs:
+            self.recognizer.phrase_threshold = kwargs['phrase_threshold']
+            log.info(f"Updated phrase_threshold to {kwargs['phrase_threshold']}")
+
+        if 'non_speaking_duration' in kwargs:
+            self.recognizer.non_speaking_duration = kwargs['non_speaking_duration']
+            log.info(f"Updated non_speaking_duration to {kwargs['non_speaking_duration']}")
+
+    def get_settings(self) -> dict:
+        """
+        현재 음성 인식 설정을 반환합니다.
+
+        Returns:
+            설정 딕셔너리
+        """
+        return {
+            "energy_threshold": self.recognizer.energy_threshold,
+            "pause_threshold": self.recognizer.pause_threshold,
+            "phrase_threshold": self.recognizer.phrase_threshold,
+            "non_speaking_duration": getattr(self.recognizer, 'non_speaking_duration', 0.8),
+            "dynamic_energy_threshold": self.recognizer.dynamic_energy_threshold
+        }
+
 
 class RealtimeAudioSink(DiscordSink):
     """
@@ -229,9 +299,15 @@ class RealtimeAudioSink(DiscordSink):
         self.recording = True
 
         # 실시간 처리 설정
-        self.chunk_duration = 1.0  # 1초마다 처리
-        self.min_audio_length = 4800  # 최소 오디오 길이 (0.1초)
-        self.max_buffer_duration = 5.0  # 최대 버퍼 시간 (5초)
+        self.chunk_duration = 5.0  # 5초마다 처리 (문장 단위 인식)
+        self.min_audio_length = 24000  # 최소 오디오 길이 (0.5초)
+        self.max_buffer_duration = 8.0  # 최대 버퍼 시간 (8초)
+
+        # Event loop 저장 (스레드 안전성을 위해)
+        try:
+            self.loop = asyncio.get_event_loop()
+        except RuntimeError:
+            self.loop = None
 
     def write(self, data, user):
         """
@@ -257,8 +333,12 @@ class RealtimeAudioSink(DiscordSink):
         # 일정 시간이 지났으면 처리 트리거
         current_time = time.time()
         if current_time - self.last_process_time[user] >= self.chunk_duration:
-            # 비동기로 처리 (블로킹 방지)
-            asyncio.create_task(self._process_user_audio_realtime(user))
+            # 비동기로 처리 (블로킹 방지, 스레드 안전)
+            if self.loop and not self.loop.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    self._process_user_audio_realtime(user),
+                    self.loop
+                )
 
     async def _process_user_audio_realtime(self, user_id):
         """
@@ -361,12 +441,14 @@ class VoiceListener:
         async def on_voice_detected(user_id, text):
             """음성이 감지되었을 때 호출되는 콜백"""
             try:
-                user = await self.bot.fetch_user(user_id)
-                log.info(f"🎯 {user.name} mentioned bot: {text}")
+                # Member 객체 가져오기 (voice 속성 필요)
+                guild = voice_client.guild
+                member = await guild.fetch_member(user_id)
+                log.info(f"🎯 {member.name} mentioned bot: {text}")
 
                 # 텍스트 채널에 알림
                 if text_channel:
-                    await text_channel.send(f"🎤 {user.mention} 불렀나요?")
+                    await text_channel.send(f"🎤 {member.mention} 불렀나요?")
 
                 # 명령어 처리
                 parsed = self.recognition_handler.parse_command(text)
@@ -377,6 +459,22 @@ class VoiceListener:
                     # 명령어를 텍스트 채널에 표시
                     if text_channel:
                         await text_channel.send(f"🔊 명령어: `{command}` {args}")
+
+                    # 실제 명령어 실행 - 직접 명령어 핸들러 호출
+                    try:
+                        await self._execute_command_directly(
+                            command=command,
+                            args=args,
+                            member=member,
+                            text_channel=text_channel,
+                            guild=text_channel.guild
+                        )
+                        log.info(f"✅ Voice command executed successfully: {command}")
+
+                    except Exception as cmd_error:
+                        log.error(f"❌ Error executing voice command: {cmd_error}", exc_info=True)
+                        if text_channel:
+                            await text_channel.send(f"❌ 명령어 실행 실패: {str(cmd_error)}")
 
             except Exception as e:
                 log.error(f"❌ Error in voice detection callback: {e}", exc_info=True)
@@ -447,13 +545,218 @@ class VoiceListener:
         """
         return guild_id in self.active_sinks
 
+    async def _execute_command_directly(
+        self,
+        command: str,
+        args: str,
+        member: discord.Member,
+        text_channel: discord.TextChannel,
+        guild: discord.Guild
+    ):
+        """
+        명령어 핸들러를 직접 호출합니다.
+        가짜 메시지를 생성하지 않고 봇의 명령어 처리 로직을 재사용합니다.
+
+        Args:
+            command: 명령어 이름 (예: "play", "skip")
+            args: 명령어 인자 문자열
+            member: 명령어를 실행한 멤버
+            text_channel: 텍스트 채널
+            guild: 길드
+        """
+        # 명령어 이름에서 "!" 제거 (이미 제거되어 있을 수 있음)
+        command = command.lstrip("!")
+        
+        # 핸들러 찾기
+        handler = getattr(self.bot, "cmd_" + command, None)
+        if not handler:
+            # alias 확인
+            if hasattr(self.bot, 'config') and self.bot.config.usealias and hasattr(self.bot, 'aliases'):
+                alias_command = self.bot.aliases.get(command)
+                if alias_command:
+                    command = alias_command
+                    handler = getattr(self.bot, "cmd_" + command, None)
+            
+            if not handler:
+                log.warning(f"Command handler not found: {command}")
+                return
+
+        # 인자를 리스트로 변환
+        args_list = args.split() if args else []
+
+        # 핸들러 시그니처 가져오기
+        argspec = inspect.signature(handler)
+        params = argspec.parameters.copy()
+
+        # handler_kwargs 구성 (bot.py의 로직 재사용)
+        handler_kwargs: Dict[str, Any] = {}
+
+        # message 파라미터가 필요한 경우 최소한의 FakeMessage 생성
+        if params.pop("message", None):
+            # 최소한의 메시지 객체만 생성 (필요한 경우에만)
+            class MinimalMessage:
+                def __init__(self, content, channel, author, guild):
+                    self.content = content
+                    self.channel = channel
+                    self.author = author
+                    self.guild = guild
+                    self.mentions = []
+                    self.mention_everyone = False
+                    self.id = 0
+                    self.attachments = []
+                    self.raw_mentions = []
+                    self.raw_channel_mentions = []
+
+            command_prefix = self.bot.config.command_prefix if hasattr(self.bot, 'config') else "!"
+            full_content = f"{command_prefix}{command}"
+            if args:
+                full_content += f" {args}"
+            
+            handler_kwargs["message"] = MinimalMessage(
+                content=full_content,
+                channel=text_channel,
+                author=member,
+                guild=guild
+            )
+
+        # 다른 파라미터들 처리
+        if params.pop("channel", None):
+            # channel을 래핑하여 await channel.typing() 호출을 처리
+            class TypingWrapper:
+                """channel.typing() 호출을 올바르게 처리하는 래퍼"""
+                def __init__(self, channel):
+                    self._channel = channel
+                
+                def __getattr__(self, name):
+                    # typing() 메서드만 래핑, 나머지는 원본 사용
+                    if name == "typing":
+                        return self._typing_wrapper
+                    return getattr(self._channel, name)
+                
+                def _typing_wrapper(self):
+                    """await channel.typing()를 trigger_typing()으로 변환"""
+                    # 클로저를 사용하여 _channel에 접근
+                    channel_ref = self._channel
+                    
+                    class TypingProxy:
+                        def __await__(self):
+                            return channel_ref.trigger_typing().__await__()
+                    
+                    return TypingProxy()
+            
+            handler_kwargs["channel"] = TypingWrapper(text_channel)
+
+        if params.pop("author", None):
+            handler_kwargs["author"] = member
+
+        if params.pop("guild", None):
+            handler_kwargs["guild"] = guild
+
+        # player 파라미터 처리
+        if params.pop("player", None):
+            if member.voice and member.voice.channel:
+                handler_kwargs["player"] = await self.bot.get_player(member.voice.channel)
+            else:
+                raise Exception("이 명령어는 음성 채널에 있어야 합니다.")
+
+        # optional player 파라미터
+        if params.pop("_player", None):
+            handler_kwargs["_player"] = self.bot.get_player_in(guild)
+
+        # permissions 파라미터
+        if params.pop("permissions", None):
+            if hasattr(self.bot, 'permissions'):
+                handler_kwargs["permissions"] = self.bot.permissions.for_user(member)
+
+        # user_mentions 파라미터
+        if params.pop("user_mentions", None):
+            handler_kwargs["user_mentions"] = []
+
+        # channel_mentions 파라미터
+        if params.pop("channel_mentions", None):
+            handler_kwargs["channel_mentions"] = []
+
+        # voice_channel 파라미터
+        if params.pop("voice_channel", None):
+            handler_kwargs["voice_channel"] = (
+                guild.me.voice.channel if guild.me.voice else None
+            )
+
+        # leftover_args 파라미터
+        if params.pop("leftover_args", None):
+            handler_kwargs["leftover_args"] = args_list
+
+        # 나머지 파라미터들 처리 (위치 인자 또는 키워드 인자)
+        for key, param in list(params.items()):
+            # VAR_POSITIONAL (*args)
+            if param.kind == param.VAR_POSITIONAL:
+                handler_kwargs[key] = args_list
+                params.pop(key)
+                continue
+
+            # KEYWORD_ONLY (*, args)
+            if param.kind == param.KEYWORD_ONLY and param.default == param.empty:
+                handler_kwargs[key] = args if args_list else ""
+                params.pop(key)
+                continue
+
+            # 기본값이 있는 경우 인자가 없으면 스킵
+            if not args_list and param.default is not param.empty:
+                params.pop(key)
+                continue
+
+            # 위치 인자 할당
+            if args_list:
+                arg_value = args_list.pop(0)
+                handler_kwargs[key] = arg_value
+                params.pop(key)
+
+        # 필수 파라미터가 남아있으면 에러 (선택적으로 docstring 반환 가능)
+        if params:
+            log.warning(f"Missing required parameters for command {command}: {list(params.keys())}")
+            # 사용법 메시지 반환은 선택적
+
+        # 권한 체크
+        if hasattr(self.bot, 'config') and hasattr(self.bot, 'permissions'):
+            user_permissions = self.bot.permissions.for_user(member)
+            if member.id != self.bot.config.owner_id and command not in ['summon', 'skip', 'remove']:
+                try:
+                    user_permissions.can_use_command(command)
+                except Exception as perm_error:
+                    log.warning(f"Permission denied for {member.name}: {perm_error}")
+                    raise
+
+        # 명령어 핸들러 직접 호출
+        response = await handler(**handler_kwargs)
+        
+        # 응답 처리 (필요한 경우)
+        if response and hasattr(response, 'content'):
+            if hasattr(self.bot, 'safe_send_message'):
+                # Response 객체인 경우
+                from .constructs import Response
+                if isinstance(response, Response):
+                    content = response.content
+                    if hasattr(self.bot, 'config') and self.bot.config.embeds and not isinstance(content, discord.Embed):
+                        embed = self.bot._gen_embed()
+                        embed.title = command
+                        embed.description = content
+                        if response.reply:
+                            embed.description = f"{member.mention} {embed.description}"
+                        content = embed
+                    
+                    await self.bot.safe_send_message(
+                        text_channel,
+                        content,
+                        expire_in=response.delete_after if hasattr(self.bot, 'config') and self.bot.config.delete_messages else 0
+                    )
+
 
 def load_bot_name_from_env() -> str:
     """
     .env 파일에서 봇 이름을 로드합니다.
 
     Returns:
-        봇 이름 (기본값: "뮤직봇")
+        봇 이름 (기본값: "!뮤직봇")
     """
     try:
         from dotenv import load_dotenv

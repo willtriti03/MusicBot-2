@@ -26,70 +26,70 @@ class VoiceCommandParser:
         # 명령어 매핑 (한국어 -> 영어 명령어)
         self.command_map = {
             # 재생 관련
-            "재생": "play",
-            "플레이": "play",
+            "재생": "!play",
+            "플레이": "!play",
             "틀어줘": "play",
             "들려줘": "play",
             "노래틀어줘": "play",
             "음악틀어줘": "play",
 
             # 일시정지
-            "일시정지": "pause",
-            "멈춰": "pause",
-            "정지": "pause",
-            "멈춰줘": "pause",
+            "일시정지": "!pause",
+            "멈춰": "!pause",
+            "정지": "!pause",
+            "멈춰줘": "!pause",
 
             # 재개
-            "다시재생": "resume",
-            "계속": "resume",
-            "다시": "resume",
-            "계속재생": "resume",
-            "이어서": "resume",
+            "다시재생": "!resume",
+            "계속": "!resume",
+            "다시": "!resume",
+            "계속재생": "!resume",
+            "이어서": "!resume",
 
             # 스킵
-            "스킵": "skip",
-            "건너뛰기": "skip",
-            "넘겨": "skip",
-            "다음": "skip",
-            "다음곡": "skip",
-            "넘겨줘": "skip",
+            "스킵": "!skip",
+            "건너뛰기": "!skip",
+            "넘겨": "!skip",
+            "다음": "!skip",
+            "다음곡": "!skip",
+            "넘겨줘": "!skip",
 
             # 큐/대기열
-            "큐": "queue",
-            "대기열": "queue",
-            "목록": "queue",
-            "재생목록": "queue",
+            "큐": "!queue",
+            "대기열": "!queue",
+            "목록": "!queue",
+            "재생목록": "!queue",
 
             # 현재 재생 중
-            "지금재생": "np",
-            "현재곡": "np",
+            "지금재생": "!np",
+            "현재곡": "!np",
             "지금곡": "np",
-            "뭐나와": "np",
-            "뭐틀고있어": "np",
+            "뭐나와": "!np",
+            "뭐틀고있어": "!np",
 
             # 볼륨
-            "볼륨": "volume",
-            "음량": "volume",
-            "소리": "volume",
-            "크기": "volume",
+            "볼륨": "!volume",
+            "음량": "!volume",
+            "소리": "!volume",
+            "크기": "!volume",
 
             # 셔플
-            "셔플": "shuffle",
-            "섞기": "shuffle",
-            "랜덤": "shuffle",
+            "셔플": "!shuffle",
+            "섞기": "!shuffle",
+            "랜덤": "!shuffle",
 
             # 반복
-            "반복": "repeat",
-            "리피트": "repeat",
-            "무한반복": "repeat",
+            "반복": "!repeat",
+            "리피트": "!repeat",
+            "무한반복": "!repeat",
 
             # 종료
-            "나와": "disconnect",
-            "종료": "disconnect",
-            "끊어": "disconnect",
-            "그만": "disconnect",
-            "나가": "disconnect",
-            "꺼져": "disconnect",
+            "나와": "!disconnect",
+            "종료": "!disconnect",
+            "끊어": "!disconnect",
+            "그만": "!disconnect",
+            "나가": "!disconnect",
+            "꺼져": "!disconnect",
 
             # 소환
             "와": "summon",
@@ -98,10 +98,10 @@ class VoiceCommandParser:
             "소환": "summon",
 
             # 클리어
-            "클리어": "clear",
-            "전부삭제": "clear",
-            "다지워": "clear",
-            "목록지워": "clear",
+            "클리어": "!clear",
+            "전부삭제": "!clear",
+            "다지워": "!clear",
+            "목록지워": "!clear",
         }
 
     def is_voice_command(self, text: str) -> bool:

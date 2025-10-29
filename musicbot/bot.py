@@ -744,8 +744,15 @@ class MusicBot(commands.Bot):
                 client: discord.VoiceClient = await channel.connect(
                     timeout=timeout,
                     reconnect=True,
-                    self_deaf=self.config.self_deafen,
                 )
+
+                # py-cord에서는 연결 후 deafen 상태 설정
+                if self.config.self_deafen:
+                    await channel.guild.change_voice_state(
+                        channel=channel,
+                        self_deaf=True
+                    )
+
                 log.voicedebug(  # type: ignore[attr-defined]
                     "MusicBot has a VoiceClient now..."
                 )
@@ -4947,6 +4954,100 @@ class MusicBot(commands.Bot):
             raise exceptions.CommandError(
                 f"Failed to stop voice listening: {str(e)}"
             )
+
+    async def cmd_voicestatus(
+        self, channel: MessageableChannel
+    ) -> CommandResponse:
+        """
+        Usage:
+            {command_prefix}voicestatus
+
+        Show current voice recognition settings.
+        """
+        settings = self.voice_recognition_handler.get_settings()
+
+        status_msg = "**🎤 음성 인식 설정 상태**\n"
+        status_msg += f"```\n"
+        status_msg += f"Energy Threshold:        {settings['energy_threshold']}\n"
+        status_msg += f"Pause Threshold:         {settings['pause_threshold']}초\n"
+        status_msg += f"Phrase Threshold:        {settings['phrase_threshold']}초\n"
+        status_msg += f"Non-Speaking Duration:   {settings['non_speaking_duration']}초\n"
+        status_msg += f"Dynamic Energy:          {settings['dynamic_energy_threshold']}\n"
+        status_msg += f"```\n"
+        status_msg += f"\n💡 설정 변경: `!voicesettings <설정명> <값>`"
+
+        return Response(status_msg, delete_after=60)
+
+    async def cmd_voicesettings(
+        self, channel: MessageableChannel, leftover_args: str
+    ) -> CommandResponse:
+        """
+        Usage:
+            {command_prefix}voicesettings <setting> <value>
+
+        Update voice recognition settings.
+
+        Available settings:
+        - energy: Background noise threshold (100-500, default: 300)
+        - pause: Silence duration to end speech (0.5-3.0, default: 1.5)
+        - phrase: Minimum speech start time (0.1-1.0, default: 0.3)
+        - silence: Non-speaking duration (0.5-2.0, default: 0.8)
+
+        Examples:
+            {command_prefix}voicesettings energy 400
+            {command_prefix}voicesettings pause 2.0
+        """
+        if not leftover_args:
+            return Response(
+                "사용법: `!voicesettings <설정명> <값>`\n"
+                "설정명: energy, pause, phrase, silence",
+                delete_after=30
+            )
+
+        args = leftover_args.split()
+        if len(args) < 2:
+            return Response(
+                "설정명과 값을 모두 입력해주세요.\n"
+                "예: `!voicesettings pause 2.0`",
+                delete_after=30
+            )
+
+        setting_name = args[0].lower()
+        try:
+            value = float(args[1])
+        except ValueError:
+            raise exceptions.CommandError("값은 숫자여야 합니다.")
+
+        # 설정 매핑
+        setting_map = {
+            'energy': 'energy_threshold',
+            'pause': 'pause_threshold',
+            'phrase': 'phrase_threshold',
+            'silence': 'non_speaking_duration'
+        }
+
+        if setting_name not in setting_map:
+            raise exceptions.CommandError(
+                f"알 수 없는 설정: {setting_name}\n"
+                "사용 가능한 설정: energy, pause, phrase, silence"
+            )
+
+        actual_setting = setting_map[setting_name]
+
+        # 값 범위 검증
+        if setting_name == 'energy' and not (100 <= value <= 500):
+            raise exceptions.CommandError("energy 값은 100-500 사이여야 합니다.")
+        elif setting_name in ['pause', 'phrase', 'silence'] and not (0.1 <= value <= 3.0):
+            raise exceptions.CommandError(f"{setting_name} 값은 0.1-3.0 사이여야 합니다.")
+
+        # 설정 업데이트
+        self.voice_recognition_handler.update_settings(**{actual_setting: value})
+
+        return Response(
+            f"✅ **{setting_name}** 설정이 **{value}**(으)로 변경되었습니다.\n"
+            f"현재 설정 확인: `!voicestatus`",
+            delete_after=30
+        )
 
     async def cmd_follow(
         self,
