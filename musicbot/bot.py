@@ -3997,8 +3997,6 @@ class MusicBot(commands.Bot):
         """
         player = _player if _player else None
 
-        await channel.typing()
-
         # Permission check removed - all users can auto-summon
         if not player and channel.guild:
             response = await self.cmd_summon(channel.guild, author, message)
@@ -4038,225 +4036,227 @@ class MusicBot(commands.Bot):
                 "Local media playback is not enabled.",
             )
 
-        # Validate song_url is actually a URL, or otherwise a search string.
-        valid_song_url = self.downloader.get_url_or_none(song_url)
-        if valid_song_url:
-            song_url = valid_song_url
-            self._do_song_blocklist_check(song_url)
+        # Start typing indicator
+        async with channel.typing():
+            # Validate song_url is actually a URL, or otherwise a search string.
+            valid_song_url = self.downloader.get_url_or_none(song_url)
+            if valid_song_url:
+                song_url = valid_song_url
+                self._do_song_blocklist_check(song_url)
 
-            # Handle if the link has a playlist ID in addition to a video ID.
-            await self._cmd_play_compound_link(
-                message,
-                player,
-                channel,
-                guild,
-                author,
-                permissions,
-                leftover_args,
-                song_url,
-                head,
-            )
-
-        if (
-            not valid_song_url
-            and leftover_args
-            and not (
-                self.config.enable_local_media
-                and song_url.lower().startswith("file://")
-            )
-        ):
-            # treat all arguments as a search string.
-            song_url = " ".join([song_url, *leftover_args])
-            leftover_args = []  # prevent issues later.
-            self._do_song_blocklist_check(song_url)
-
-        # Validate spotify links are supported before we try them.
-        if "open.spotify.com" in song_url.lower():
-            if self.config.spotify_enabled:
-                if not Spotify.is_url_supported(song_url):
-                    raise exceptions.CommandError(
-                        "Spotify URL is invalid or not currently supported."
-                    )
-            else:
-                raise exceptions.CommandError(
-                    "Detected a spotify URL, but spotify is not enabled."
+                # Handle if the link has a playlist ID in addition to a video ID.
+                await self._cmd_play_compound_link(
+                    message,
+                    player,
+                    channel,
+                    guild,
+                    author,
+                    permissions,
+                    leftover_args,
+                    song_url,
+                    head,
                 )
 
-        # This lock prevent spamming play commands to add entries that exceeds time limit/ maximum song limit
-        async with self.aiolocks[_func_() + ":" + str(author.id)]:
             if (
-                permissions.max_songs
-                and player.playlist.count_for_user(author) >= permissions.max_songs
+                not valid_song_url
+                and leftover_args
+                and not (
+                    self.config.enable_local_media
+                    and song_url.lower().startswith("file://")
+                )
             ):
-                raise exceptions.PermissionsError(
-                    self.str.get(
-                        "cmd-play-limit",
-                        "You have reached your enqueued song limit ({0})",
-                    ).format(permissions.max_songs),
-                    expire_in=30,
-                )
+                # treat all arguments as a search string.
+                song_url = " ".join([song_url, *leftover_args])
+                leftover_args = []  # prevent issues later.
+                self._do_song_blocklist_check(song_url)
 
-            if player.karaoke_mode and not permissions.bypass_karaoke_mode:
-                raise exceptions.PermissionsError(
-                    self.str.get(
-                        "karaoke-enabled",
-                        "Karaoke mode is enabled, please try again when its disabled!",
-                    ),
-                    expire_in=30,
-                )
-
-            # Get processed info from ytdlp
-            info = None
-            try:
-                info = await self.downloader.extract_info(
-                    song_url, download=False, process=True
-                )
-            except Exception as e:
-                info = None
-                log.exception("Issue with extract_info(): ")
-                raise exceptions.CommandError(str(e)) from e
-
-            if not info:
-                raise exceptions.CommandError(
-                    self.str.get(
-                        "cmd-play-noinfo",
-                        "That video cannot be played. Try using the {0}stream command.",
-                    ).format(self.server_data[guild.id].command_prefix),
-                    expire_in=30,
-                )
-
-            # ensure the extractor has been allowed via permissions.
-            if info.extractor not in permissions.extractors and permissions.extractors:
-                raise exceptions.PermissionsError(
-                    self.str.get(
-                        "cmd-play-badextractor",
-                        "You do not have permission to play the requested media. Service `{}` is not permitted.",
-                    ).format(info.extractor),
-                    expire_in=30,
-                )
-
-            # if the result has "entries" but it's empty, it might be a failed search.
-            if "entries" in info and not info.entry_count:
-                if info.extractor == "youtube:search":
-                    # TOOD: UI, i18n stuff
+            # Validate spotify links are supported before we try them.
+            if "open.spotify.com" in song_url.lower():
+                if self.config.spotify_enabled:
+                    if not Spotify.is_url_supported(song_url):
+                        raise exceptions.CommandError(
+                            "Spotify URL is invalid or not currently supported."
+                        )
+                else:
                     raise exceptions.CommandError(
-                        f"Youtube search returned no results for:  {song_url}"
+                        "Detected a spotify URL, but spotify is not enabled."
                     )
 
-            # If the result has usable entries, we assume it is a playlist
-            if info.has_entries:
-                await self._do_playlist_checks(player, author, info)
-
-                num_songs = info.playlist_count or info.entry_count
-
-                if shuffle_entries:
-                    random.shuffle(info["entries"])
-
-                # TODO: I can create an event emitter object instead, add event functions, and every play list might be asyncified
-                # Also have a "verify_entry" hook with the entry as an arg and returns the entry if its ok
-                start_time = time.time()
-                entry_list, position = await player.playlist.import_from_info(
-                    info,
-                    channel=channel,
-                    author=author,
-                    head=False,
-                    ignore_video_id=ignore_video_id,
-                )
-
-                time_taken = time.time() - start_time
-                listlen = len(entry_list)
-
-                log.info(
-                    "Processed %d of %d songs in %.3f seconds at %.2f s/song",
-                    listlen,
-                    num_songs,
-                    time_taken,
-                    time_taken / listlen if listlen else 1,
-                )
-
-                if not entry_list:
-                    raise exceptions.CommandError(
+            # This lock prevent spamming play commands to add entries that exceeds time limit/ maximum song limit
+            async with self.aiolocks[_func_() + ":" + str(author.id)]:
+                if (
+                    permissions.max_songs
+                    and player.playlist.count_for_user(author) >= permissions.max_songs
+                ):
+                    raise exceptions.PermissionsError(
                         self.str.get(
-                            "cmd-play-playlist-maxduration",
-                            "No songs were added, all songs were over max duration (%ss)",
-                        )
-                        % permissions.max_song_length,
+                            "cmd-play-limit",
+                            "You have reached your enqueued song limit ({0})",
+                        ).format(permissions.max_songs),
                         expire_in=30,
                     )
 
-                reply_text = self.str.get(
-                    "cmd-play-playlist-reply",
-                    "Enqueued **%s** songs to be played. Position in queue: %s",
-                )
-                btext = str(listlen)
-
-            # If it's an entry
-            else:
-                # youtube:playlist extractor but it's actually an entry
-                # ^ wish I had a URL for this one.
-                if info.get("extractor", "") == "youtube:playlist":
-                    log.noise(  # type: ignore[attr-defined]
-                        "Extracted an entry with youtube:playlist as extractor key"
-                    )
-
-                # Check the block list again, with the info this time.
-                self._do_song_blocklist_check(info.url)
-                self._do_song_blocklist_check(info.title)
-
-                # Duration limit disabled: do not block songs based on max_song_length.
-
-                entry, position = await player.playlist.add_entry_from_info(
-                    info, channel=channel, author=author, head=head
-                )
-
-                reply_text = self.str.get(
-                    "cmd-play-song-reply",
-                    "Enqueued `%s` to be played. Position in queue: %s",
-                )
-                btext = entry.title
-
-            log.debug("Added song(s) at position %s", position)
-            if position == 1 and player.is_stopped:
-                position = self.str.get("cmd-play-next", "Up next!")
-                reply_text %= (btext, position)
-
-            # shift the playing track to the end of queue and skip current playback.
-            elif skip_playing and player.is_playing and player.current_entry:
-                player.playlist.entries.append(player.current_entry)
-
-                # handle history playlist updates.
-                if (
-                    self.config.enable_queue_history_global
-                    or self.config.enable_queue_history_guilds
-                ):
-                    self.server_data[guild.id].current_playing_url = ""
-
-                player.skip()
-
-                position = self.str.get("cmd-play-next", "Up next!")
-                reply_text %= (btext, position)
-
-            else:
-                reply_text %= (btext, position)
-                try:
-                    time_until = await player.playlist.estimate_time_until(
-                        position, player
-                    )
-                    reply_text += (
+                if player.karaoke_mode and not permissions.bypass_karaoke_mode:
+                    raise exceptions.PermissionsError(
                         self.str.get(
-                            "cmd-play-eta", " - estimated time until playing: %s"
-                        )
-                        % f"`{format_song_duration(time_until)}`"
-                    )
-                except exceptions.InvalidDataError:
-                    reply_text += self.str.get(
-                        "cmd-play-eta-error", " - cannot estimate time until playing"
-                    )
-                    log.warning(
-                        "Cannot estimate time until playing for position: %d", position
+                            "karaoke-enabled",
+                            "Karaoke mode is enabled, please try again when its disabled!",
+                        ),
+                        expire_in=30,
                     )
 
-        return Response(reply_text, delete_after=30)
+                # Get processed info from ytdlp
+                info = None
+                try:
+                    info = await self.downloader.extract_info(
+                        song_url, download=False, process=True
+                    )
+                except Exception as e:
+                    info = None
+                    log.exception("Issue with extract_info(): ")
+                    raise exceptions.CommandError(str(e)) from e
+
+                if not info:
+                    raise exceptions.CommandError(
+                        self.str.get(
+                            "cmd-play-noinfo",
+                            "That video cannot be played. Try using the {0}stream command.",
+                        ).format(self.server_data[guild.id].command_prefix),
+                        expire_in=30,
+                    )
+
+                # ensure the extractor has been allowed via permissions.
+                if info.extractor not in permissions.extractors and permissions.extractors:
+                    raise exceptions.PermissionsError(
+                        self.str.get(
+                            "cmd-play-badextractor",
+                            "You do not have permission to play the requested media. Service `{}` is not permitted.",
+                        ).format(info.extractor),
+                        expire_in=30,
+                    )
+
+                # if the result has "entries" but it's empty, it might be a failed search.
+                if "entries" in info and not info.entry_count:
+                    if info.extractor == "youtube:search":
+                        # TOOD: UI, i18n stuff
+                        raise exceptions.CommandError(
+                            f"Youtube search returned no results for:  {song_url}"
+                        )
+
+                # If the result has usable entries, we assume it is a playlist
+                if info.has_entries:
+                    await self._do_playlist_checks(player, author, info)
+
+                    num_songs = info.playlist_count or info.entry_count
+
+                    if shuffle_entries:
+                        random.shuffle(info["entries"])
+
+                    # TODO: I can create an event emitter object instead, add event functions, and every play list might be asyncified
+                    # Also have a "verify_entry" hook with the entry as an arg and returns the entry if its ok
+                    start_time = time.time()
+                    entry_list, position = await player.playlist.import_from_info(
+                        info,
+                        channel=channel,
+                        author=author,
+                        head=False,
+                        ignore_video_id=ignore_video_id,
+                    )
+
+                    time_taken = time.time() - start_time
+                    listlen = len(entry_list)
+
+                    log.info(
+                        "Processed %d of %d songs in %.3f seconds at %.2f s/song",
+                        listlen,
+                        num_songs,
+                        time_taken,
+                        time_taken / listlen if listlen else 1,
+                    )
+
+                    if not entry_list:
+                        raise exceptions.CommandError(
+                            self.str.get(
+                                "cmd-play-playlist-maxduration",
+                                "No songs were added, all songs were over max duration (%ss)",
+                            )
+                            % permissions.max_song_length,
+                            expire_in=30,
+                        )
+
+                    reply_text = self.str.get(
+                        "cmd-play-playlist-reply",
+                        "Enqueued **%s** songs to be played. Position in queue: %s",
+                    )
+                    btext = str(listlen)
+
+                # If it's an entry
+                else:
+                    # youtube:playlist extractor but it's actually an entry
+                    # ^ wish I had a URL for this one.
+                    if info.get("extractor", "") == "youtube:playlist":
+                        log.noise(  # type: ignore[attr-defined]
+                            "Extracted an entry with youtube:playlist as extractor key"
+                        )
+
+                    # Check the block list again, with the info this time.
+                    self._do_song_blocklist_check(info.url)
+                    self._do_song_blocklist_check(info.title)
+
+                    # Duration limit disabled: do not block songs based on max_song_length.
+
+                    entry, position = await player.playlist.add_entry_from_info(
+                        info, channel=channel, author=author, head=head
+                    )
+
+                    reply_text = self.str.get(
+                        "cmd-play-song-reply",
+                        "Enqueued `%s` to be played. Position in queue: %s",
+                    )
+                    btext = entry.title
+
+                log.debug("Added song(s) at position %s", position)
+                if position == 1 and player.is_stopped:
+                    position = self.str.get("cmd-play-next", "Up next!")
+                    reply_text %= (btext, position)
+
+                # shift the playing track to the end of queue and skip current playback.
+                elif skip_playing and player.is_playing and player.current_entry:
+                    player.playlist.entries.append(player.current_entry)
+
+                    # handle history playlist updates.
+                    if (
+                        self.config.enable_queue_history_global
+                        or self.config.enable_queue_history_guilds
+                    ):
+                        self.server_data[guild.id].current_playing_url = ""
+
+                    player.skip()
+
+                    position = self.str.get("cmd-play-next", "Up next!")
+                    reply_text %= (btext, position)
+
+                else:
+                    reply_text %= (btext, position)
+                    try:
+                        time_until = await player.playlist.estimate_time_until(
+                            position, player
+                        )
+                        reply_text += (
+                            self.str.get(
+                                "cmd-play-eta", " - estimated time until playing: %s"
+                            )
+                            % f"`{format_song_duration(time_until)}`"
+                        )
+                    except exceptions.InvalidDataError:
+                        reply_text += self.str.get(
+                            "cmd-play-eta-error", " - cannot estimate time until playing"
+                        )
+                        log.warning(
+                            "Cannot estimate time until playing for position: %d", position
+                        )
+
+                    return Response(reply_text, delete_after=30)
 
     async def cmd_stream(
         self,
@@ -4482,26 +4482,26 @@ class MusicBot(commands.Bot):
         search_msg = await self.safe_send_message(
             channel, self.str.get("cmd-search-searching", "Searching for videos...")
         )
-        await channel.typing()
+        info = None
+        async with channel.typing():
+            try:  # pylint: disable=no-else-return
+                info = await self.downloader.extract_info(
+                    search_query, download=False, process=True
+                )
 
-        try:  # pylint: disable=no-else-return
-            info = await self.downloader.extract_info(
-                search_query, download=False, process=True
-            )
+            except (
+                exceptions.ExtractionError,
+                exceptions.SpotifyError,
+                youtube_dl.utils.YoutubeDLError,
+                youtube_dl.networking.exceptions.RequestError,
+            ) as e:
+                if search_msg:
+                    await self.safe_edit_message(search_msg, str(e), send_if_fail=True)
+                return None
 
-        except (
-            exceptions.ExtractionError,
-            exceptions.SpotifyError,
-            youtube_dl.utils.YoutubeDLError,
-            youtube_dl.networking.exceptions.RequestError,
-        ) as e:
-            if search_msg:
-                await self.safe_edit_message(search_msg, str(e), send_if_fail=True)
-            return None
-
-        else:
-            if search_msg:
-                await self.safe_delete_message(search_msg)
+            else:
+                if search_msg:
+                    await self.safe_delete_message(search_msg)
 
         if not info:
             return Response(
@@ -7122,31 +7122,30 @@ class MusicBot(commands.Bot):
                 "Could not import `objgraph`, is it installed?"
             )
 
-        await channel.typing()
+        async with channel.typing():
+            if func == "growth":
+                f = StringIO()
+                objgraph.show_growth(limit=10, file=f)
+                f.seek(0)
+                data = f.read()
+                f.close()
 
-        if func == "growth":
-            f = StringIO()
-            objgraph.show_growth(limit=10, file=f)
-            f.seek(0)
-            data = f.read()
-            f.close()
+            elif func == "leaks":
+                f = StringIO()
+                objgraph.show_most_common_types(
+                    objects=objgraph.get_leaking_objects(), file=f
+                )
+                f.seek(0)
+                data = f.read()
+                f.close()
 
-        elif func == "leaks":
-            f = StringIO()
-            objgraph.show_most_common_types(
-                objects=objgraph.get_leaking_objects(), file=f
-            )
-            f.seek(0)
-            data = f.read()
-            f.close()
+            elif func == "leakstats":
+                data = objgraph.typestats(objects=objgraph.get_leaking_objects())
 
-        elif func == "leakstats":
-            data = objgraph.typestats(objects=objgraph.get_leaking_objects())
+            else:
+                data = eval("objgraph." + func)  # pylint: disable=eval-used
 
-        else:
-            data = eval("objgraph." + func)  # pylint: disable=eval-used
-
-        return Response(data, codeblock="py")
+            return Response(data, codeblock="py")
 
     @dev_only
     async def cmd_debug(
@@ -7194,109 +7193,108 @@ class MusicBot(commands.Bot):
         pip_status = ""
         updates = False
 
-        await channel.typing()
+        async with channel.typing():
+            # attempt fetching git info.
+            try:
+                git_bin = shutil.which("git")
+                if not git_bin:
+                    git_status = "Could not locate git executable."
+                    raise RuntimeError("Could not locate git executable.")
 
-        # attempt fetching git info.
-        try:
-            git_bin = shutil.which("git")
-            if not git_bin:
-                git_status = "Could not locate git executable."
-                raise RuntimeError("Could not locate git executable.")
+                git_cmd_branch = [git_bin, "rev-parse", "--abbrev-ref", "HEAD"]
+                git_cmd_check = [git_bin, "fetch", "--dry-run"]
 
-            git_cmd_branch = [git_bin, "rev-parse", "--abbrev-ref", "HEAD"]
-            git_cmd_check = [git_bin, "fetch", "--dry-run"]
-
-            # extract current git branch name.
-            cmd_branch = await asyncio.create_subprocess_exec(
-                *git_cmd_branch,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            branch_stdout, _stderr = await cmd_branch.communicate()
-            branch_name = branch_stdout.decode("utf8").strip()
-
-            # check if fetch would update.
-            cmd_check = await asyncio.create_subprocess_exec(
-                *git_cmd_check,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            check_stdout, check_stderr = await cmd_check.communicate()
-            check_stdout += check_stderr
-            lines = check_stdout.decode("utf8").split("\n")
-
-            # inspect dry run for our branch name to see if there are updates.
-            commit_to = ""
-            for line in lines:
-                parts = line.split()
-                if branch_name in parts:
-                    commits = line.strip().split(" ", maxsplit=1)[0]
-                    _commit_at, commit_to = commits.split("..")
-                    break
-
-            if not commit_to:
-                git_status = f"No updates in branch `{branch_name}` remote."
-            else:
-                git_status = (
-                    f"New commits are available in `{branch_name}` branch remote."
+                # extract current git branch name.
+                cmd_branch = await asyncio.create_subprocess_exec(
+                    *git_cmd_branch,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
                 )
-                updates = True
-        except (OSError, ValueError, ConnectionError, RuntimeError):
-            log.exception("Failed while checking for updates via git command.")
-            git_status = "Error while checking, see logs for details."
+                branch_stdout, _stderr = await cmd_branch.communicate()
+                branch_name = branch_stdout.decode("utf8").strip()
 
-        # attempt to fetch pip info.
-        try:
-            pip_cmd_check = [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "-U",
-                "-r",
-                "./requirements.txt",
-                "--quiet",
-                "--dry-run",
-                "--report",
-                "-",
-            ]
-            pip_cmd = await asyncio.create_subprocess_exec(
-                *pip_cmd_check,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            pip_stdout, _stderr = await pip_cmd.communicate()
-            pip_json = json.loads(pip_stdout)
-            pip_packages = ""
-            for pkg in pip_json.get("install", []):
-                meta = pkg.get("metadata", {})
-                if not meta:
-                    log.debug("Package missing meta in pip report.")
-                    continue
-                name = meta.get("name", "")
-                ver = meta.get("version", "")
-                if name and ver:
-                    pip_packages += f"Update for `{name}` to version: `{ver}`\n"
-            if pip_packages:
-                pip_status = pip_packages
-                updates = True
+                # check if fetch would update.
+                cmd_check = await asyncio.create_subprocess_exec(
+                    *git_cmd_check,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                check_stdout, check_stderr = await cmd_check.communicate()
+                check_stdout += check_stderr
+                lines = check_stdout.decode("utf8").split("\n")
+
+                # inspect dry run for our branch name to see if there are updates.
+                commit_to = ""
+                for line in lines:
+                    parts = line.split()
+                    if branch_name in parts:
+                        commits = line.strip().split(" ", maxsplit=1)[0]
+                        _commit_at, commit_to = commits.split("..")
+                        break
+
+                if not commit_to:
+                    git_status = f"No updates in branch `{branch_name}` remote."
+                else:
+                    git_status = (
+                        f"New commits are available in `{branch_name}` branch remote."
+                    )
+                    updates = True
+            except (OSError, ValueError, ConnectionError, RuntimeError):
+                log.exception("Failed while checking for updates via git command.")
+                git_status = "Error while checking, see logs for details."
+
+            # attempt to fetch pip info.
+            try:
+                pip_cmd_check = [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "-U",
+                    "-r",
+                    "./requirements.txt",
+                    "--quiet",
+                    "--dry-run",
+                    "--report",
+                    "-",
+                ]
+                pip_cmd = await asyncio.create_subprocess_exec(
+                    *pip_cmd_check,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                pip_stdout, _stderr = await pip_cmd.communicate()
+                pip_json = json.loads(pip_stdout)
+                pip_packages = ""
+                for pkg in pip_json.get("install", []):
+                    meta = pkg.get("metadata", {})
+                    if not meta:
+                        log.debug("Package missing meta in pip report.")
+                        continue
+                    name = meta.get("name", "")
+                    ver = meta.get("version", "")
+                    if name and ver:
+                        pip_packages += f"Update for `{name}` to version: `{ver}`\n"
+                if pip_packages:
+                    pip_status = pip_packages
+                    updates = True
+                else:
+                    pip_status = "No updates for dependencies found."
+            except (OSError, ValueError, ConnectionError):
+                log.exception("Failed to get pip update status due to some error.")
+                pip_status = "Error while checking, see logs for details."
+
+            if updates:
+                header = "There are updates for MusicBot available for download."
             else:
-                pip_status = "No updates for dependencies found."
-        except (OSError, ValueError, ConnectionError):
-            log.exception("Failed to get pip update status due to some error.")
-            pip_status = "Error while checking, see logs for details."
+                header = "MusicBot is totally up-to-date!"
 
-        if updates:
-            header = "There are updates for MusicBot available for download."
-        else:
-            header = "MusicBot is totally up-to-date!"
-
-        return Response(
-            f"{header}\n\n"
-            f"**Source Code Updates:**\n{git_status}\n\n"
-            f"**Dependency Updates:**\n{pip_status}",
-            delete_after=60,
-        )
+            return Response(
+                f"{header}\n\n"
+                f"**Source Code Updates:**\n{git_status}\n\n"
+                f"**Dependency Updates:**\n{pip_status}",
+                delete_after=60,
+            )
 
     async def cmd_uptime(self) -> CommandResponse:
         """
@@ -7468,6 +7466,10 @@ class MusicBot(commands.Bot):
         # Extract the command name and args from the message content.
         command, *args = message_content.split(" ")
         command = command[len(command_prefix) :].lower().strip()
+        
+        # 디버그 로그 (play/p 명령어일 때만)
+        if command in ["p", "play"]:
+            log.debug(f"🔍 Parsed command: '{command}', prefix: '{command_prefix}', message: '{message_content}'")
 
         # [] produce [''] which is not what we want (it break things)
         if args:
@@ -7476,14 +7478,25 @@ class MusicBot(commands.Bot):
             args = []
 
         handler = getattr(self, "cmd_" + command, None)
+        if command in ["p", "play"]:
+            log.debug(f"🔍 Handler lookup for 'cmd_{command}': {handler is not None}")
         if not handler:
             # alias handler
-            if self.config.usealias:
-                command = self.aliases.get(command)
-                handler = getattr(self, "cmd_" + command, None)
+            if self.config.usealias and hasattr(self, 'aliases') and self.aliases:
+                alias_result = self.aliases.get(command)
+                if alias_result:  # alias가 존재하고 빈 문자열이 아닐 때만
+                    original_command = command
+                    command = alias_result
+                    handler = getattr(self, "cmd_" + command, None)
+                    if handler:
+                        log.debug(f"Alias resolved: {original_command} -> {command}")
+                    else:
+                        log.warning(f"Alias '{original_command}' -> '{command}' exists but handler 'cmd_{command}' not found")
                 if not handler:
+                    log.debug(f"Command '{command}' not found and no valid alias")
                     return
             else:
+                log.debug(f"Command '{command}' not found (aliases disabled)")
                 return
 
         if isinstance(message.channel, discord.abc.PrivateChannel):
