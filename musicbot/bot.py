@@ -3295,46 +3295,15 @@ class MusicBot(commands.Bot):
         :raises:  PermissionsError  if permissions deny the playlist.
         """
         num_songs = result_info.playlist_count or result_info.entry_count
-        permissions = self.permissions.for_user(author)
+        # permissions = self.permissions.for_user(author)
 
-        # TODO: correct the language here, since this could be playlist or search results?
-        # I have to do extra checks anyways because you can request an arbitrary number of search results
-        if not permissions.allow_playlists and num_songs > 1:
-            raise exceptions.PermissionsError(
-                self.str.get(
-                    "playlists-noperms", "You are not allowed to request playlists"
-                ),
-                expire_in=30,
-            )
-
-        if (
-            permissions.max_playlist_length
-            and num_songs > permissions.max_playlist_length
-        ):
-            raise exceptions.PermissionsError(
-                self.str.get(
-                    "playlists-big", "Playlist has too many entries ({0} > {1})"
-                ).format(num_songs, permissions.max_playlist_length),
-                expire_in=30,
-            )
-
-        # This is a little bit weird when it says (x + 0 > y), I might add the other check back in
-        if (
-            permissions.max_songs
-            and player.playlist.count_for_user(author) + num_songs
-            > permissions.max_songs
-        ):
-            raise exceptions.PermissionsError(
-                self.str.get(
-                    "playlists-limit",
-                    "Playlist entries + your already queued songs reached limit ({0} + {1} > {2})",
-                ).format(
-                    num_songs,
-                    player.playlist.count_for_user(author),
-                    permissions.max_songs,
-                ),
-                expire_in=30,
-            )
+        # 권한 체크 제거 - 모든 유저가 모든 기능 사용 가능
+        # if not permissions.allow_playlists and num_songs > 1:
+        #     raise exceptions.PermissionsError(...)
+        # if permissions.max_playlist_length and num_songs > permissions.max_playlist_length:
+        #     raise exceptions.PermissionsError(...)
+        # if permissions.max_songs and player.playlist.count_for_user(author) + num_songs > permissions.max_songs:
+        #     raise exceptions.PermissionsError(...)
         return True
 
     async def _handle_guild_auto_pause(self, player: MusicPlayer, _lc: int = 0) -> None:
@@ -3696,7 +3665,7 @@ class MusicBot(commands.Bot):
         )
 
     async def cmd_repeat(
-        self, guild: discord.Guild, option: str = ""
+        self, guild: discord.Guild, author: discord.Member = None, message: discord.Message = None, option: str = ""
     ) -> CommandResponse:
         """
         Usage:
@@ -3713,15 +3682,24 @@ class MusicBot(commands.Bot):
         prefix = self.server_data[guild.id].command_prefix
 
         if not player:
-            raise exceptions.CommandError(
-                self.str.get(
-                    "cmd-repeat-no-voice",
-                    "The bot is not in a voice channel.  "
-                    "Use %ssummon to summon it to your voice channel.",
+            # author가 있고 voice channel에 있으면 자동으로 summon 시도
+            if author and author.voice and author.voice.channel and message:
+                try:
+                    await self.cmd_summon(guild, author, message)
+                    player = self.get_player_in(guild)
+                except Exception:
+                    pass
+            
+            if not player:
+                raise exceptions.CommandError(
+                    self.str.get(
+                        "cmd-repeat-no-voice",
+                        "The bot is not in a voice channel.  "
+                        "Use %ssummon to summon it to your voice channel.",
+                    )
+                    % prefix,
+                    expire_in=30,
                 )
-                % prefix,
-                expire_in=30,
-            )
 
         if not player.current_entry:
             return Response(
@@ -3825,8 +3803,10 @@ class MusicBot(commands.Bot):
         self,
         guild: discord.Guild,
         channel: MessageableChannel,
-        command: str,
-        leftover_args: List[str],
+        author: discord.Member = None,
+        message: discord.Message = None,
+        command: str = "",
+        leftover_args: List[str] = None,
     ) -> CommandResponse:
         """
         Usage:
@@ -3836,16 +3816,27 @@ class MusicBot(commands.Bot):
         Swaps the location of a song within the playlist.
         """
         # TODO: move command needs some tlc. args renamed, better checks.
+        if leftover_args is None:
+            leftover_args = []
         player = self.get_player_in(guild)
         if not player:
-            prefix = self.server_data[guild.id].command_prefix
-            raise exceptions.CommandError(
-                self.str.get(
-                    "cmd-move-no-voice",
-                    "The bot is not in a voice channel.  "
-                    f"Use {prefix}summon to summon it to your voice channel.",
+            # author가 있고 voice channel에 있으면 자동으로 summon 시도
+            if author and author.voice and author.voice.channel and message:
+                try:
+                    await self.cmd_summon(guild, author, message)
+                    player = self.get_player_in(guild)
+                except Exception:
+                    pass
+            
+            if not player:
+                prefix = self.server_data[guild.id].command_prefix
+                raise exceptions.CommandError(
+                    self.str.get(
+                        "cmd-move-no-voice",
+                        "The bot is not in a voice channel.  "
+                        f"Use {prefix}summon to summon it to your voice channel.",
+                    )
                 )
-            )
 
         if not player.current_entry:
             return Response(
@@ -4084,26 +4075,11 @@ class MusicBot(commands.Bot):
 
             # This lock prevent spamming play commands to add entries that exceeds time limit/ maximum song limit
             async with self.aiolocks[_func_() + ":" + str(author.id)]:
-                if (
-                    permissions.max_songs
-                    and player.playlist.count_for_user(author) >= permissions.max_songs
-                ):
-                    raise exceptions.PermissionsError(
-                        self.str.get(
-                            "cmd-play-limit",
-                            "You have reached your enqueued song limit ({0})",
-                        ).format(permissions.max_songs),
-                        expire_in=30,
-                    )
-
-                if player.karaoke_mode and not permissions.bypass_karaoke_mode:
-                    raise exceptions.PermissionsError(
-                        self.str.get(
-                            "karaoke-enabled",
-                            "Karaoke mode is enabled, please try again when its disabled!",
-                        ),
-                        expire_in=30,
-                    )
+                # 권한 체크 제거 - 모든 유저가 모든 기능 사용 가능
+                # if permissions.max_songs and player.playlist.count_for_user(author) >= permissions.max_songs:
+                #     raise exceptions.PermissionsError(...)
+                # if player.karaoke_mode and not permissions.bypass_karaoke_mode:
+                #     raise exceptions.PermissionsError(...)
 
                 # Get processed info from ytdlp
                 info = None
@@ -4125,15 +4101,10 @@ class MusicBot(commands.Bot):
                         expire_in=30,
                     )
 
+                # 권한 체크 제거 - 모든 유저가 모든 기능 사용 가능
                 # ensure the extractor has been allowed via permissions.
-                if info.extractor not in permissions.extractors and permissions.extractors:
-                    raise exceptions.PermissionsError(
-                        self.str.get(
-                            "cmd-play-badextractor",
-                            "You do not have permission to play the requested media. Service `{}` is not permitted.",
-                        ).format(info.extractor),
-                        expire_in=30,
-                    )
+                # if info.extractor not in permissions.extractors and permissions.extractors:
+                #     raise exceptions.PermissionsError(...)
 
                 # if the result has "entries" but it's empty, it might be a failed search.
                 if "entries" in info and not info.entry_count:
@@ -4175,12 +4146,12 @@ class MusicBot(commands.Bot):
                     )
 
                     if not entry_list:
+                        # 권한 체크 제거 - max_song_length 체크가 비활성화되어 있으므로 이 에러는 거의 발생하지 않음
                         raise exceptions.CommandError(
                             self.str.get(
                                 "cmd-play-playlist-maxduration",
-                                "No songs were added, all songs were over max duration (%ss)",
-                            )
-                            % permissions.max_song_length,
+                                "No songs were added, all songs were over max duration",
+                            ),
                             expire_in=30,
                         )
 
@@ -4316,26 +4287,11 @@ class MusicBot(commands.Bot):
                 f"Use {prefix}summon to summon it to your voice channel."
             )
 
-        if (
-            permissions.max_songs
-            and player.playlist.count_for_user(author) >= permissions.max_songs
-        ):
-            raise exceptions.PermissionsError(
-                self.str.get(
-                    "cmd-stream-limit",
-                    "You have reached your enqueued song limit ({0})",
-                ).format(permissions.max_songs),
-                expire_in=30,
-            )
-
-        if player.karaoke_mode and not permissions.bypass_karaoke_mode:
-            raise exceptions.PermissionsError(
-                self.str.get(
-                    "karaoke-enabled",
-                    "Karaoke mode is enabled, please try again when its disabled!",
-                ),
-                expire_in=30,
-            )
+        # 권한 체크 제거 - 모든 유저가 모든 기능 사용 가능
+        # if permissions.max_songs and player.playlist.count_for_user(author) >= permissions.max_songs:
+        #     raise exceptions.PermissionsError(...)
+        # if player.karaoke_mode and not permissions.bypass_karaoke_mode:
+        #     raise exceptions.PermissionsError(...)
 
         async with channel.typing():
             # TODO: find more streams to test.
@@ -4397,26 +4353,11 @@ class MusicBot(commands.Bot):
         The command issuer can use reactions to indicate their response to each result.
         """
 
-        if (
-            permissions.max_songs
-            and player.playlist.count_for_user(author) > permissions.max_songs
-        ):
-            raise exceptions.PermissionsError(
-                self.str.get(
-                    "cmd-search-limit",
-                    "You have reached your playlist item limit ({0})",
-                ).format(permissions.max_songs),
-                expire_in=30,
-            )
-
-        if player.karaoke_mode and not permissions.bypass_karaoke_mode:
-            raise exceptions.PermissionsError(
-                self.str.get(
-                    "karaoke-enabled",
-                    "Karaoke mode is enabled, please try again when its disabled!",
-                ),
-                expire_in=30,
-            )
+        # 권한 체크 제거 - 모든 유저가 모든 기능 사용 가능
+        # if permissions.max_songs and player.playlist.count_for_user(author) > permissions.max_songs:
+        #     raise exceptions.PermissionsError(...)
+        # if player.karaoke_mode and not permissions.bypass_karaoke_mode:
+        #     raise exceptions.PermissionsError(...)
 
         def argcheck() -> None:
             if not leftover_args:
@@ -4436,7 +4377,8 @@ class MusicBot(commands.Bot):
 
         service = "youtube"
         items_requested = self.config.defaultsearchresults
-        max_items = permissions.max_search_items
+        # max_items = permissions.max_search_items  # 권한 체크 제거
+        max_items = 999999  # 제한 없음
         services = {
             "youtube": "ytsearch",
             "soundcloud": "scsearch",
@@ -4454,14 +4396,9 @@ class MusicBot(commands.Bot):
             items_requested = int(leftover_args.pop(0))
             argcheck()
 
-            if items_requested > max_items:
-                raise exceptions.CommandError(
-                    self.str.get(
-                        "cmd-search-searchlimit",
-                        "You cannot search for more than %s videos",
-                    )
-                    % max_items
-                )
+            # 권한 체크 제거 - 모든 유저가 모든 기능 사용 가능
+            # if items_requested > max_items:
+            #     raise exceptions.CommandError(...)
 
         # Look jake, if you see this and go "what the fuck are you doing"
         # and have a better idea on how to do this, I'd be delighted to know.
@@ -7578,9 +7515,24 @@ class MusicBot(commands.Bot):
                     and message.author.voice
                     and message.author.voice.channel
                 ):
-                    handler_kwargs["player"] = await self.get_player(
-                        message.author.voice.channel
-                    )
+                    try:
+                        handler_kwargs["player"] = await self.get_player(
+                            message.author.voice.channel
+                        )
+                    except exceptions.CommandError as e:
+                        # 봇이 음성 채널에 없으면 자동으로 summon 시도
+                        if "not in a voice channel" in str(e):
+                            try:
+                                await self.cmd_summon(message.guild, message.author, message)
+                                # summon 후 다시 시도
+                                handler_kwargs["player"] = await self.get_player(
+                                    message.author.voice.channel
+                                )
+                            except Exception as summon_error:
+                                # summon 실패 시 원래 에러를 다시 발생
+                                raise e
+                        else:
+                            raise
                 else:
                     # TODO: enable ignore-non-voice commands to work here
                     # by looking for the first available VC if author has none.
@@ -7671,10 +7623,9 @@ class MusicBot(commands.Bot):
                     handler_kwargs[key] = arg_value
                     params.pop(key)
 
-            # Test non-owners for command permissions.
-            # Skip permission check for summon, skip, and remove commands
-            if message.author.id != self.config.owner_id and command not in ['summon', 'skip', 'remove']:
-                user_permissions.can_use_command(command)
+            # 권한 체크 제거 - 모든 유저가 모든 명령어 사용 가능
+            # if message.author.id != self.config.owner_id and command not in ['summon', 'skip', 'remove']:
+            #     user_permissions.can_use_command(command)
 
             # Invalid usage, return docstring
             if params:
@@ -7788,22 +7739,13 @@ class MusicBot(commands.Bot):
         """
         commands = []
         for att in dir(self):
-            # This will always return at least cmd_help, since they needed perms to run this command
+            # 권한 체크 제거 - 모든 명령어 표시
             if att.startswith("cmd_") and not hasattr(getattr(self, att), "dev_cmd"):
-                user_permissions = self.permissions.for_user(message.author)
                 command_name = att.replace("cmd_", "").lower()
-                whitelist = user_permissions.command_whitelist
-                blacklist = user_permissions.command_blacklist
                 if list_all_cmds:
                     commands.append(command_name)
-
-                elif blacklist and command_name in blacklist:
-                    pass
-
-                elif whitelist and command_name not in whitelist:
-                    pass
-
                 else:
+                    # 모든 명령어 추가 (whitelist/blacklist 체크 제거)
                     commands.append(command_name)
         return commands
 
