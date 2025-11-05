@@ -3276,8 +3276,63 @@ class MusicBot(commands.Bot):
                 expire_in=30,
             )
 
+        player = self.get_player_in(guild)
+        
+        # 끌 때: 자동 재생중인 음악 바로 스킵
+        if desired is False and server_state.auto_similar_enabled:
+            if player and player.current_entry:
+                # 자동으로 추가된 곡인지 확인 (author와 channel이 None인 경우)
+                if player.current_entry.from_auto_playlist:
+                    # 현재 재생중인 곡이 자동으로 추가된 곡이면 스킵
+                    player.skip()
+                    log.info("Skipped auto-similar track when disabling autosimilar")
+        
         server_state.auto_similar_enabled = desired
         await server_state.save_guild_options_file()
+
+        # 켤 때: 플레이중인 음악이 없다면 노래를 하나 틀기
+        if desired is True and not server_state.auto_similar_enabled:
+            if player:
+                # 플레이중인 음악이 없고, 큐도 비어있을 때
+                if not player.current_entry and not player.playlist.entries:
+                    # 마지막 재생된 곡 URL이 있으면 그것을 기반으로 추천
+                    if server_state.current_playing_url:
+                        try:
+                            # 마지막 재생 URL을 기반으로 엔트리 정보 가져오기
+                            last_entry_info = await self.downloader.extract_info(
+                                server_state.current_playing_url,
+                                download=False,
+                                process=True
+                            )
+                            if not last_entry_info.has_entries:
+                                # 임시 엔트리 생성 (from_auto_playlist 체크를 위해)
+                                from .entry import URLPlaylistEntry
+                                temp_entry = URLPlaylistEntry(
+                                    player.playlist, 
+                                    last_entry_info,
+                                    author=None,
+                                    channel=None
+                                )
+                                # 마지막 곡 기반으로 추천 곡 추가 시도
+                                queued = await self._auto_queue_similar_track(
+                                    guild, player, temp_entry
+                                )
+                                if queued:
+                                    log.info("Auto-queued similar track when enabling autosimilar")
+                                    # 재생 시작
+                                    if player.is_stopped and player.playlist.entries:
+                                        player.play()
+                        except Exception as e:
+                            log.debug("Failed to queue similar track on enable: %s", e)
+                    else:
+                        # 마지막 재생 기록이 없으면 히스토리 확인
+                        if server_state.auto_similar_history:
+                            log.debug("No current playing URL, using history for similar track")
+                            # 히스토리에서 첫 번째 항목 사용 시도
+                            # (히스토리는 video_id나 URL이 저장되어 있음)
+                # 이미 큐에 곡이 있고 플레이중이 아니면 재생 시작
+                elif player.is_stopped and player.playlist.entries:
+                    player.play()
 
         status_text = "enabled" if desired else "disabled"
         return Response(
