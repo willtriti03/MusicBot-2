@@ -1421,6 +1421,10 @@ class MusicBot(commands.Bot):
     ) -> bool:
         """Attempt to queue a track related to the one that just finished."""
         server_state = self.server_data[guild.id]
+        
+        # 안전장치: 자동 추천 기능이 비활성화되어 있으면 즉시 반환
+        if not server_state.auto_similar_enabled:
+            return False
 
         search_title = (finished_entry.title or "").strip()
         if not search_title:
