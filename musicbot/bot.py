@@ -1394,6 +1394,11 @@ class MusicBot(commands.Bot):
         if player.is_dead:
             return
 
+        # 재생할 노래가 없으면 자동 재생하지 않고 정지 상태 유지
+        if not player.playlist.entries and not player.current_entry:
+            log.debug("No songs to play, maintaining stopped state.")
+            return
+
         if player.is_stopped:
             player.play()
         else:
