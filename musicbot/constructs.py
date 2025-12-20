@@ -88,6 +88,7 @@ class GuildSpecificData:
         ] = None
         self.autoplaylist: "AutoPlaylist" = self._bot.playlist_mgr.get_default()
         self.current_playing_url: str = ""
+        self.auto_similar_history: Deque[str] = deque(maxlen=20)
 
         # create a task to load any persistent guild options.
         # in theory, this should work out fine.

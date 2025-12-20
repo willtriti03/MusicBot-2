@@ -395,6 +395,18 @@ class Config:
                 "This only applies to the current playing song if it was added by the auto-playlist."
             ),
         )
+        self.auto_similar: bool = self.register.init_option(
+            section="MusicBot",
+            option="AutoSimilar",
+            dest="auto_similar",
+            default=ConfigDefaults.auto_similar,
+            getter="getboolean",
+            comment=(
+                "Enable automatic playback of similar songs when the queue is empty.\n"
+                "Uses YouTube Mix playlists to find songs similar to the last played track.\n"
+                "This provides a diverse music experience with Korean and international songs."
+            ),
+        )
         # TODO:  this option needs more implementation to ensure blocked tracks are removed.
         self.auto_playlist_remove_on_block: bool = self.register.init_option(
             section="MusicBot",
@@ -1146,6 +1158,7 @@ class ConfigDefaults:
     auto_playlist: bool = True
     auto_playlist_random: bool = True
     auto_playlist_autoskip: bool = False
+    auto_similar: bool = True
     auto_playlist_remove_on_block: bool = False
     auto_pause: bool = True
     delete_messages: bool = True

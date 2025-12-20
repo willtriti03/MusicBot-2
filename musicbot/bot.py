@@ -1388,20 +1388,184 @@ class MusicBot(commands.Bot):
                 log.warning("No playable songs in the autoplaylist, disabling.")
                 self.config.auto_playlist = False
 
-        else:  # Don't serialize for autoplaylist events
+        # 유사 음악 자동 추가 기능
+        elif (
+            not player.playlist.entries
+            and not player.current_entry
+            and self.config.auto_similar
+            and entry
+            and entry.url
+        ):
+            log.info("Queue is empty, attempting to add similar songs from YouTube Mix...")
+            server_state = self.server_data[guild.id]
+
+            # YouTube 동영상 ID 추출
+            video_id = None
+            if "youtube.com/watch?v=" in entry.url:
+                video_id = entry.url.split("watch?v=")[1].split("&")[0]
+            elif "youtu.be/" in entry.url:
+                video_id = entry.url.split("youtu.be/")[1].split("?")[0]
+
+            if video_id:
+                # YouTube Mix 플레이리스트 URL 생성
+                mix_url = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"
+                log.info("Fetching similar songs from YouTube Mix: %s", mix_url)
+
+                try:
+                    # Mix 플레이리스트에서 곡 추출
+                    info = await self.downloader.extract_info(
+                        mix_url, download=False, process=True
+                    )
+
+                    if info.has_entries:
+                        entries = info.get_entries_objects()
+
+                        # 중복 방지를 위한 추적 시스템
+                        seen_url_keys: Set[str] = set()
+                        seen_video_ids: Set[str] = set()
+
+                        def register_url(url: Optional[str]) -> None:
+                            if isinstance(url, str) and url:
+                                seen_url_keys.add(url.lower())
+
+                        def register_info(info_obj: Optional["downloader.YtdlpResponseDict"]) -> None:
+                            if not info_obj:
+                                return
+                            register_url(info_obj.url)
+                            register_url(info_obj.webpage_url)
+                            register_url(info_obj.original_url)
+                            vid = info_obj.video_id
+                            if vid:
+                                seen_video_ids.add(vid.lower())
+
+                        # 방금 재생한 곡 등록
+                        register_url(entry.url)
+                        register_info(getattr(entry, "info", None))
+
+                        # 현재 큐에 있는 모든 곡 등록
+                        for queued_entry in player.playlist.entries:
+                            register_url(getattr(queued_entry, "url", None))
+                            register_info(getattr(queued_entry, "info", None))
+
+                        # 현재 재생 중인 곡 등록
+                        if player.current_entry:
+                            register_url(getattr(player.current_entry, "url", None))
+                            register_info(getattr(player.current_entry, "info", None))
+
+                        # 서버 히스토리에서 최근 재생한 곡들 등록
+                        register_url(server_state.last_played_song_subject)
+                        register_url(server_state.current_playing_url)
+                        for hist_item in server_state.auto_similar_history:
+                            register_url(hist_item)
+
+                        # 후보곡들을 섞어서 다양성 확보
+                        random.shuffle(entries)
+
+                        added_count = 0
+                        max_similar_songs = 10  # 최대 10곡까지 추가
+
+                        for similar_entry in entries:
+                            if added_count >= max_similar_songs:
+                                break
+
+                            # 후보곡의 정보 추출
+                            candidate_url = similar_entry.get_playable_url()
+                            candidate_video_id = (
+                                similar_entry.video_id.lower()
+                                if similar_entry.video_id
+                                else ""
+                            )
+
+                            candidate_urls = {
+                                candidate_url,
+                                similar_entry.url,
+                                similar_entry.webpage_url,
+                                similar_entry.original_url,
+                            }
+
+                            # video_id로 중복 체크
+                            if candidate_video_id and candidate_video_id in seen_video_ids:
+                                log.debug("Skipping duplicate video_id: %s", candidate_video_id)
+                                continue
+
+                            # URL로 중복 체크
+                            if any(
+                                isinstance(url, str) and url and url.lower() in seen_url_keys
+                                for url in candidate_urls
+                            ):
+                                log.debug("Skipping duplicate URL: %s", candidate_url)
+                                continue
+
+                            try:
+                                await player.playlist.add_entry_from_info(
+                                    similar_entry,
+                                    channel=None,
+                                    author=None,
+                                    head=False,
+                                )
+
+                                # 추가된 곡을 히스토리에 기록
+                                history_key = (
+                                    candidate_video_id
+                                    or candidate_url
+                                    or similar_entry.title
+                                    or ""
+                                )
+                                if history_key:
+                                    server_state.auto_similar_history.append(history_key)
+
+                                # 다음 반복을 위해 추가된 곡 등록
+                                if candidate_video_id:
+                                    seen_video_ids.add(candidate_video_id)
+                                for url in candidate_urls:
+                                    if isinstance(url, str) and url:
+                                        seen_url_keys.add(url.lower())
+
+                                added_count += 1
+                                log.debug("Added similar song: %s", similar_entry.title)
+
+                            except Exception as e:
+                                log.warning("Failed to add similar song: %s", e)
+                                continue
+
+                        log.info("Added %d similar songs to the queue", added_count)
+                    else:
+                        log.warning("YouTube Mix returned no entries")
+
+                except Exception as e:
+                    log.error("Error fetching similar songs from YouTube Mix: %s", e)
+                    log.debug("Exception details:", exc_info=True)
+            else:
+                log.debug("Could not extract video ID from URL: %s", entry.url)
+
+        else:
+            # auto_playlist와 auto_similar이 모두 비활성화되어 있음
+            log.debug(
+                "Auto-playlist and auto-similar are both disabled. Queue management only."
+            )
             await self.serialize_queue(guild)
 
         if player.is_dead:
             return
 
-        # 재생할 노래가 없으면 자동 재생하지 않고 정지 상태 유지
+        # 큐가 비어있는지 확인
         if not player.playlist.entries and not player.current_entry:
-            log.debug("No songs to play, maintaining stopped state.")
+            if not self.config.auto_playlist and not self.config.auto_similar:
+                log.info(
+                    "Queue is empty and auto-play features are disabled. Playback stopped."
+                )
+            else:
+                log.debug(
+                    "Queue is empty after auto-play attempt. No more songs to play."
+                )
             return
 
-        if player.is_stopped:
+        # 큐에 곡이 있으면 재생 시작
+        if player.is_stopped and player.playlist.entries:
+            log.debug("Starting playback from stopped state.")
             player.play()
-        else:
+        elif not player.is_stopped and player.playlist.entries:
+            log.debug("Continuing playback.")
             player.play(_continue=True)
 
     async def on_player_entry_added(
