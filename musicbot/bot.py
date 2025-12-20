@@ -1420,6 +1420,30 @@ class MusicBot(commands.Bot):
                     if info.has_entries:
                         entries = info.get_entries_objects()
 
+                        # 재생한 곡의 언어 감지
+                        def detect_language(text: str) -> str:
+                            """Detect language from text (Korean, Japanese, Chinese, or Other)"""
+                            import re
+                            has_korean = bool(re.search(r'[가-힣]', text))
+                            has_japanese = bool(re.search(r'[ぁ-んァ-ン]', text))
+                            has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
+
+                            if has_korean:
+                                return 'korean'
+                            elif has_japanese:
+                                return 'japanese'
+                            elif has_chinese:
+                                return 'chinese'
+                            else:
+                                return 'other'
+
+                        original_language = detect_language(entry.title or "")
+                        log.info(
+                            "Detected language '%s' from track: %s",
+                            original_language,
+                            entry.title,
+                        )
+
                         # 중복 방지를 위한 추적 시스템
                         seen_url_keys: Set[str] = set()
                         seen_video_ids: Set[str] = set()
@@ -1458,13 +1482,48 @@ class MusicBot(commands.Bot):
                         for hist_item in server_state.auto_similar_history:
                             register_url(hist_item)
 
-                        # 후보곡들을 섞어서 다양성 확보
-                        random.shuffle(entries)
+                        # 언어별로 곡 분류 (같은 언어 우선, 하지만 유연하게)
+                        same_language_entries = []
+                        other_language_entries = []
+
+                        for similar_entry in entries:
+                            candidate_language = detect_language(similar_entry.title or "")
+
+                            # 원본이 한글/일본어/중국어 제목이면 같은 언어 우선
+                            # 하지만 영어 제목의 한국/일본 가수도 포함되도록 유연하게 처리
+                            if original_language in ['korean', 'japanese', 'chinese']:
+                                # 같은 언어는 우선 추가
+                                if candidate_language == original_language:
+                                    same_language_entries.append(similar_entry)
+                                # 영어/기타는 후순위 (완전히 제외하지 않음)
+                                else:
+                                    other_language_entries.append(similar_entry)
+                            else:
+                                # 원본이 영어/기타면 모든 곡 동등하게 취급
+                                same_language_entries.append(similar_entry)
+
+                        # 같은 언어 곡 우선, 부족하면 다른 언어도 추가
+                        random.shuffle(same_language_entries)
+                        random.shuffle(other_language_entries)
+
+                        # 같은 언어가 충분하면 (7곡 이상) 다른 언어는 3곡만 추가
+                        # 부족하면 다른 언어로 채움
+                        if len(same_language_entries) >= 7:
+                            prioritized_entries = same_language_entries + other_language_entries[:3]
+                        else:
+                            prioritized_entries = same_language_entries + other_language_entries
+
+                        log.info(
+                            "Language preference: %d primary tracks, %d secondary tracks (detected: %s)",
+                            len(same_language_entries),
+                            len(other_language_entries),
+                            original_language,
+                        )
 
                         added_count = 0
                         max_similar_songs = 10  # 최대 10곡까지 추가
 
-                        for similar_entry in entries:
+                        for similar_entry in prioritized_entries:
                             if added_count >= max_similar_songs:
                                 break
 
@@ -5785,6 +5844,77 @@ class MusicBot(commands.Bot):
 
         return None
 
+    async def cmd_autosimilar(
+        self, guild: discord.Guild, value: str = ""
+    ) -> CommandResponse:
+        """
+        Usage:
+            {command_prefix}autosimilar [on/off]
+            {command_prefix}autosimilar
+
+        Toggles or sets the automatic similar song recommendation feature.
+        When enabled, the bot will automatically add similar songs from YouTube Mix
+        when the queue is empty, providing diverse music in Korean and other languages.
+
+        If no value is provided, shows the current status.
+        """
+        if not value:
+            # Show current status
+            status = ["disabled", "enabled"][self.config.auto_similar]
+            return Response(
+                f"Auto-similar song recommendation is currently **{status}**.\n"
+                f"Use `{self.config.command_prefix}autosimilar on` or "
+                f"`{self.config.command_prefix}autosimilar off` to change it.",
+                delete_after=30,
+            )
+
+        value = value.lower()
+        bool_y = ["on", "y", "yes", "enabled", "enable"]
+        bool_n = ["off", "n", "no", "disabled", "disable"]
+
+        if value in bool_y:
+            if self.config.auto_similar:
+                return Response(
+                    "Auto-similar song recommendation is already enabled!",
+                    delete_after=20,
+                )
+            self.config.auto_similar = True
+            log.info(
+                "Auto-similar enabled by user %s in guild %s",
+                guild.id,
+                guild.name,
+            )
+            return Response(
+                "✅ Auto-similar song recommendation is now **enabled**!\n"
+                "The bot will automatically add similar songs when the queue is empty.",
+                delete_after=30,
+            )
+
+        elif value in bool_n:
+            if not self.config.auto_similar:
+                return Response(
+                    "Auto-similar song recommendation is already disabled!",
+                    delete_after=20,
+                )
+            self.config.auto_similar = False
+            log.info(
+                "Auto-similar disabled by user %s in guild %s",
+                guild.id,
+                guild.name,
+            )
+            return Response(
+                "⛔ Auto-similar song recommendation is now **disabled**.\n"
+                "The bot will no longer automatically add similar songs.",
+                delete_after=30,
+            )
+
+        else:
+            raise exceptions.CommandError(
+                f"Invalid value. Use `on` or `off`.\n"
+                f"Example: `{self.config.command_prefix}autosimilar on`",
+                expire_in=20,
+            )
+
     @owner_only
     async def cmd_option(
         self, guild: discord.Guild, option: str, value: str
@@ -5798,8 +5928,8 @@ class MusicBot(commands.Bot):
         config file.
 
         Valid options:
-            autoplaylist, save_videos, now_playing_mentions, auto_playlist_random, auto_pause,
-            delete_messages, delete_invoking, write_current_song, round_robin_queue
+            autoplaylist, auto_similar, save_videos, now_playing_mentions, auto_playlist_random,
+            auto_pause, delete_messages, delete_invoking, write_current_song, round_robin_queue
 
         For information about these options, see the option's comment in the config file.
         """
@@ -5811,6 +5941,7 @@ class MusicBot(commands.Bot):
             "save_videos",
             "now_playing_mentions",
             "auto_playlist_random",
+            "auto_similar",
             "auto_pause",
             "delete_messages",
             "delete_invoking",
