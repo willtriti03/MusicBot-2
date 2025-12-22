@@ -89,6 +89,7 @@ class GuildSpecificData:
         self.autoplaylist: "AutoPlaylist" = self._bot.playlist_mgr.get_default()
         self.current_playing_url: str = ""
         self.auto_similar_history: Deque[str] = deque(maxlen=20)
+        self.auto_similar_enabled: bool = True  # 서버별 자동 유사곡 추천 설정
 
         # create a task to load any persistent guild options.
         # in theory, this should work out fine.

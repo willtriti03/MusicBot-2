@@ -1392,210 +1392,228 @@ class MusicBot(commands.Bot):
         elif (
             not player.playlist.entries
             and not player.current_entry
-            and self.config.auto_similar
             and entry
             and entry.url
         ):
-            log.info("Queue is empty, attempting to add similar songs from YouTube Mix...")
             server_state = self.server_data[guild.id]
 
-            # YouTube 동영상 ID 추출
-            video_id = None
-            if "youtube.com/watch?v=" in entry.url:
-                video_id = entry.url.split("watch?v=")[1].split("&")[0]
-            elif "youtu.be/" in entry.url:
-                video_id = entry.url.split("youtu.be/")[1].split("?")[0]
+            # 서버별 자동 유사곡 설정 체크
+            if not server_state.auto_similar_enabled:
+                log.info(
+                    "Auto-similar is DISABLED for guild '%s' (ID: %s). Not adding similar songs.",
+                    guild.name,
+                    guild.id,
+                )
+                pass  # 아무것도 하지 않고 다음으로 진행 (serialize_queue로)
+            elif not self.config.auto_similar:
+                log.debug(
+                    "Auto-similar is disabled in global config. Not adding similar songs."
+                )
+                pass  # 아무것도 하지 않고 다음으로 진행
+            else:
+                log.warning(
+                    "Auto-similar is ENABLED for guild '%s' (ID: %s). Adding similar songs...",
+                    guild.name,
+                    guild.id,
+                )
 
-            if video_id:
-                # YouTube Mix 플레이리스트 URL 생성
-                mix_url = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"
-                log.info("Fetching similar songs from YouTube Mix: %s", mix_url)
+                # YouTube 동영상 ID 추출
+                video_id = None
+                if "youtube.com/watch?v=" in entry.url:
+                    video_id = entry.url.split("watch?v=")[1].split("&")[0]
+                elif "youtu.be/" in entry.url:
+                    video_id = entry.url.split("youtu.be/")[1].split("?")[0]
 
-                try:
-                    # Mix 플레이리스트에서 곡 추출
-                    info = await self.downloader.extract_info(
-                        mix_url, download=False, process=True
-                    )
+                if video_id:
+                    # YouTube Mix 플레이리스트 URL 생성
+                    mix_url = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"
+                    log.info("Fetching similar songs from YouTube Mix: %s", mix_url)
 
-                    if info.has_entries:
-                        entries = info.get_entries_objects()
-
-                        # 재생한 곡의 언어 감지
-                        def detect_language(text: str) -> str:
-                            """Detect language from text (Korean, Japanese, Chinese, or Other)"""
-                            import re
-                            has_korean = bool(re.search(r'[가-힣]', text))
-                            has_japanese = bool(re.search(r'[ぁ-んァ-ン]', text))
-                            has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
-
-                            if has_korean:
-                                return 'korean'
-                            elif has_japanese:
-                                return 'japanese'
-                            elif has_chinese:
-                                return 'chinese'
-                            else:
-                                return 'other'
-
-                        original_language = detect_language(entry.title or "")
-                        log.info(
-                            "Detected language '%s' from track: %s",
-                            original_language,
-                            entry.title,
+                    try:
+                        # Mix 플레이리스트에서 곡 추출
+                        info = await self.downloader.extract_info(
+                            mix_url, download=False, process=True
                         )
 
-                        # 중복 방지를 위한 추적 시스템
-                        seen_url_keys: Set[str] = set()
-                        seen_video_ids: Set[str] = set()
+                        if info.has_entries:
+                            entries = info.get_entries_objects()
 
-                        def register_url(url: Optional[str]) -> None:
-                            if isinstance(url, str) and url:
-                                seen_url_keys.add(url.lower())
+                            # 재생한 곡의 언어 감지
+                            def detect_language(text: str) -> str:
+                                """Detect language from text (Korean, Japanese, Chinese, or Other)"""
+                                import re
+                                has_korean = bool(re.search(r'[가-힣]', text))
+                                has_japanese = bool(re.search(r'[ぁ-んァ-ン]', text))
+                                has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
 
-                        def register_info(info_obj: Optional["downloader.YtdlpResponseDict"]) -> None:
-                            if not info_obj:
-                                return
-                            register_url(info_obj.url)
-                            register_url(info_obj.webpage_url)
-                            register_url(info_obj.original_url)
-                            vid = info_obj.video_id
-                            if vid:
-                                seen_video_ids.add(vid.lower())
-
-                        # 방금 재생한 곡 등록
-                        register_url(entry.url)
-                        register_info(getattr(entry, "info", None))
-
-                        # 현재 큐에 있는 모든 곡 등록
-                        for queued_entry in player.playlist.entries:
-                            register_url(getattr(queued_entry, "url", None))
-                            register_info(getattr(queued_entry, "info", None))
-
-                        # 현재 재생 중인 곡 등록
-                        if player.current_entry:
-                            register_url(getattr(player.current_entry, "url", None))
-                            register_info(getattr(player.current_entry, "info", None))
-
-                        # 서버 히스토리에서 최근 재생한 곡들 등록
-                        register_url(server_state.last_played_song_subject)
-                        register_url(server_state.current_playing_url)
-                        for hist_item in server_state.auto_similar_history:
-                            register_url(hist_item)
-
-                        # 언어별로 곡 분류 (같은 언어 우선, 하지만 유연하게)
-                        same_language_entries = []
-                        other_language_entries = []
-
-                        for similar_entry in entries:
-                            candidate_language = detect_language(similar_entry.title or "")
-
-                            # 원본이 한글/일본어/중국어 제목이면 같은 언어 우선
-                            # 하지만 영어 제목의 한국/일본 가수도 포함되도록 유연하게 처리
-                            if original_language in ['korean', 'japanese', 'chinese']:
-                                # 같은 언어는 우선 추가
-                                if candidate_language == original_language:
-                                    same_language_entries.append(similar_entry)
-                                # 영어/기타는 후순위 (완전히 제외하지 않음)
+                                if has_korean:
+                                    return 'korean'
+                                elif has_japanese:
+                                    return 'japanese'
+                                elif has_chinese:
+                                    return 'chinese'
                                 else:
-                                    other_language_entries.append(similar_entry)
-                            else:
-                                # 원본이 영어/기타면 모든 곡 동등하게 취급
-                                same_language_entries.append(similar_entry)
+                                    return 'other'
 
-                        # 같은 언어 곡 우선, 부족하면 다른 언어도 추가
-                        random.shuffle(same_language_entries)
-                        random.shuffle(other_language_entries)
-
-                        # 같은 언어가 충분하면 (7곡 이상) 다른 언어는 3곡만 추가
-                        # 부족하면 다른 언어로 채움
-                        if len(same_language_entries) >= 7:
-                            prioritized_entries = same_language_entries + other_language_entries[:3]
-                        else:
-                            prioritized_entries = same_language_entries + other_language_entries
-
-                        log.info(
-                            "Language preference: %d primary tracks, %d secondary tracks (detected: %s)",
-                            len(same_language_entries),
-                            len(other_language_entries),
-                            original_language,
-                        )
-
-                        added_count = 0
-                        max_similar_songs = 10  # 최대 10곡까지 추가
-
-                        for similar_entry in prioritized_entries:
-                            if added_count >= max_similar_songs:
-                                break
-
-                            # 후보곡의 정보 추출
-                            candidate_url = similar_entry.get_playable_url()
-                            candidate_video_id = (
-                                similar_entry.video_id.lower()
-                                if similar_entry.video_id
-                                else ""
+                            original_language = detect_language(entry.title or "")
+                            log.info(
+                                "Detected language '%s' from track: %s",
+                                original_language,
+                                entry.title,
                             )
 
-                            candidate_urls = {
-                                candidate_url,
-                                similar_entry.url,
-                                similar_entry.webpage_url,
-                                similar_entry.original_url,
-                            }
+                            # 중복 방지를 위한 추적 시스템
+                            seen_url_keys: Set[str] = set()
+                            seen_video_ids: Set[str] = set()
 
-                            # video_id로 중복 체크
-                            if candidate_video_id and candidate_video_id in seen_video_ids:
-                                log.debug("Skipping duplicate video_id: %s", candidate_video_id)
-                                continue
+                            def register_url(url: Optional[str]) -> None:
+                                if isinstance(url, str) and url:
+                                    seen_url_keys.add(url.lower())
 
-                            # URL로 중복 체크
-                            if any(
-                                isinstance(url, str) and url and url.lower() in seen_url_keys
-                                for url in candidate_urls
-                            ):
-                                log.debug("Skipping duplicate URL: %s", candidate_url)
-                                continue
+                            def register_info(info_obj: Optional["downloader.YtdlpResponseDict"]) -> None:
+                                if not info_obj:
+                                    return
+                                register_url(info_obj.url)
+                                register_url(info_obj.webpage_url)
+                                register_url(info_obj.original_url)
+                                vid = info_obj.video_id
+                                if vid:
+                                    seen_video_ids.add(vid.lower())
 
-                            try:
-                                await player.playlist.add_entry_from_info(
-                                    similar_entry,
-                                    channel=None,
-                                    author=None,
-                                    head=False,
+                            # 방금 재생한 곡 등록
+                            register_url(entry.url)
+                            register_info(getattr(entry, "info", None))
+
+                            # 현재 큐에 있는 모든 곡 등록
+                            for queued_entry in player.playlist.entries:
+                                register_url(getattr(queued_entry, "url", None))
+                                register_info(getattr(queued_entry, "info", None))
+
+                            # 현재 재생 중인 곡 등록
+                            if player.current_entry:
+                                register_url(getattr(player.current_entry, "url", None))
+                                register_info(getattr(player.current_entry, "info", None))
+
+                            # 서버 히스토리에서 최근 재생한 곡들 등록
+                            register_url(server_state.last_played_song_subject)
+                            register_url(server_state.current_playing_url)
+                            for hist_item in server_state.auto_similar_history:
+                                register_url(hist_item)
+
+                            # 언어별로 곡 분류 (같은 언어 우선, 하지만 유연하게)
+                            same_language_entries = []
+                            other_language_entries = []
+
+                            for similar_entry in entries:
+                                candidate_language = detect_language(similar_entry.title or "")
+
+                                # 원본이 한글/일본어/중국어 제목이면 같은 언어 우선
+                                # 하지만 영어 제목의 한국/일본 가수도 포함되도록 유연하게 처리
+                                if original_language in ['korean', 'japanese', 'chinese']:
+                                    # 같은 언어는 우선 추가
+                                    if candidate_language == original_language:
+                                        same_language_entries.append(similar_entry)
+                                    # 영어/기타는 후순위 (완전히 제외하지 않음)
+                                    else:
+                                        other_language_entries.append(similar_entry)
+                                else:
+                                    # 원본이 영어/기타면 모든 곡 동등하게 취급
+                                    same_language_entries.append(similar_entry)
+
+                            # 같은 언어 곡 우선, 부족하면 다른 언어도 추가
+                            random.shuffle(same_language_entries)
+                            random.shuffle(other_language_entries)
+
+                            # 같은 언어가 충분하면 (7곡 이상) 다른 언어는 3곡만 추가
+                            # 부족하면 다른 언어로 채움
+                            if len(same_language_entries) >= 7:
+                                prioritized_entries = same_language_entries + other_language_entries[:3]
+                            else:
+                                prioritized_entries = same_language_entries + other_language_entries
+
+                            log.info(
+                                "Language preference: %d primary tracks, %d secondary tracks (detected: %s)",
+                                len(same_language_entries),
+                                len(other_language_entries),
+                                original_language,
+                            )
+
+                            added_count = 0
+                            max_similar_songs = 10  # 최대 10곡까지 추가
+
+                            for similar_entry in prioritized_entries:
+                                if added_count >= max_similar_songs:
+                                    break
+
+                                # 후보곡의 정보 추출
+                                candidate_url = similar_entry.get_playable_url()
+                                candidate_video_id = (
+                                    similar_entry.video_id.lower()
+                                    if similar_entry.video_id
+                                    else ""
                                 )
 
-                                # 추가된 곡을 히스토리에 기록
-                                history_key = (
-                                    candidate_video_id
-                                    or candidate_url
-                                    or similar_entry.title
-                                    or ""
-                                )
-                                if history_key:
-                                    server_state.auto_similar_history.append(history_key)
+                                candidate_urls = {
+                                    candidate_url,
+                                    similar_entry.url,
+                                    similar_entry.webpage_url,
+                                    similar_entry.original_url,
+                                }
 
-                                # 다음 반복을 위해 추가된 곡 등록
-                                if candidate_video_id:
-                                    seen_video_ids.add(candidate_video_id)
-                                for url in candidate_urls:
-                                    if isinstance(url, str) and url:
-                                        seen_url_keys.add(url.lower())
+                                # video_id로 중복 체크
+                                if candidate_video_id and candidate_video_id in seen_video_ids:
+                                    log.debug("Skipping duplicate video_id: %s", candidate_video_id)
+                                    continue
 
-                                added_count += 1
-                                log.debug("Added similar song: %s", similar_entry.title)
+                                # URL로 중복 체크
+                                if any(
+                                    isinstance(url, str) and url and url.lower() in seen_url_keys
+                                    for url in candidate_urls
+                                ):
+                                    log.debug("Skipping duplicate URL: %s", candidate_url)
+                                    continue
 
-                            except Exception as e:
-                                log.warning("Failed to add similar song: %s", e)
-                                continue
+                                try:
+                                    await player.playlist.add_entry_from_info(
+                                        similar_entry,
+                                        channel=None,
+                                        author=None,
+                                        head=False,
+                                    )
 
-                        log.info("Added %d similar songs to the queue", added_count)
-                    else:
-                        log.warning("YouTube Mix returned no entries")
+                                    # 추가된 곡을 히스토리에 기록
+                                    history_key = (
+                                        candidate_video_id
+                                        or candidate_url
+                                        or similar_entry.title
+                                        or ""
+                                    )
+                                    if history_key:
+                                        server_state.auto_similar_history.append(history_key)
 
-                except Exception as e:
-                    log.error("Error fetching similar songs from YouTube Mix: %s", e)
-                    log.debug("Exception details:", exc_info=True)
-            else:
-                log.debug("Could not extract video ID from URL: %s", entry.url)
+                                    # 다음 반복을 위해 추가된 곡 등록
+                                    if candidate_video_id:
+                                        seen_video_ids.add(candidate_video_id)
+                                    for url in candidate_urls:
+                                        if isinstance(url, str) and url:
+                                            seen_url_keys.add(url.lower())
+
+                                    added_count += 1
+                                    log.debug("Added similar song: %s", similar_entry.title)
+
+                                except Exception as e:
+                                    log.warning("Failed to add similar song: %s", e)
+                                    continue
+
+                            log.info("Added %d similar songs to the queue", added_count)
+                        else:
+                            log.warning("YouTube Mix returned no entries")
+
+                    except Exception as e:
+                        log.error("Error fetching similar songs from YouTube Mix: %s", e)
+                        log.debug("Exception details:", exc_info=True)
+                else:
+                    log.debug("Could not extract video ID from URL: %s", entry.url)
 
         else:
             # auto_playlist와 auto_similar이 모두 비활성화되어 있음
@@ -5858,49 +5876,52 @@ class MusicBot(commands.Bot):
 
         If no value is provided, shows the current status.
         """
+        server_state = self.server_data[guild.id]
+
         if not value:
             # Show current status
-            status = ["disabled", "enabled"][self.config.auto_similar]
+            status = ["❌ DISABLED", "✅ ENABLED"][server_state.auto_similar_enabled]
             return Response(
-                f"Auto-similar song recommendation is currently **{status}**.\n"
+                f"🎵 **Auto-similar status for this server:** {status}\n\n"
                 f"Use `{self.config.command_prefix}autosimilar on` or "
                 f"`{self.config.command_prefix}autosimilar off` to change it.",
                 delete_after=30,
             )
 
         value = value.lower()
-        bool_y = ["on", "y", "yes", "enabled", "enable"]
-        bool_n = ["off", "n", "no", "disabled", "disable"]
+        bool_y = ["on", "y", "yes", "enabled", "enable", "1", "true"]
+        bool_n = ["off", "n", "no", "disabled", "disable", "0", "false"]
 
         if value in bool_y:
-            if self.config.auto_similar:
+            if server_state.auto_similar_enabled:
                 return Response(
-                    "Auto-similar song recommendation is already enabled!",
+                    "⚠️ Auto-similar is already **ENABLED** for this server!",
                     delete_after=20,
                 )
-            self.config.auto_similar = True
-            log.info(
-                "Auto-similar enabled by user %s in guild %s",
-                guild.id,
+            server_state.auto_similar_enabled = True
+            log.warning(
+                "[AUTO-SIMILAR] ENABLED in guild '%s' (ID: %s)",
                 guild.name,
+                guild.id,
             )
             return Response(
-                "✅ Auto-similar song recommendation is now **enabled**!\n"
-                "The bot will automatically add similar songs when the queue is empty.",
+                "✅ **Auto-similar is now ENABLED!**\n\n"
+                "The bot will automatically add similar songs when the queue is empty.\n"
+                "This setting is saved for this server only.",
                 delete_after=30,
             )
 
         elif value in bool_n:
-            if not self.config.auto_similar:
+            if not server_state.auto_similar_enabled:
                 return Response(
-                    "Auto-similar song recommendation is already disabled!",
+                    "⚠️ Auto-similar is already **DISABLED** for this server!",
                     delete_after=20,
                 )
-            self.config.auto_similar = False
-            log.info(
-                "Auto-similar disabled by user %s in guild %s",
-                guild.id,
+            server_state.auto_similar_enabled = False
+            log.warning(
+                "[AUTO-SIMILAR] DISABLED in guild '%s' (ID: %s)",
                 guild.name,
+                guild.id,
             )
             return Response(
                 "⛔ Auto-similar song recommendation is now **disabled**.\n"
