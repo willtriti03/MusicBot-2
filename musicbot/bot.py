@@ -1657,12 +1657,14 @@ class MusicBot(commands.Bot):
 
         # 큐에 곡이 있으면 재생 시작
         if player.playlist.entries:
-            if player.is_stopped:
-                log.info("Starting playback - queue has %d entries", len(player.playlist.entries))
+            if not player.current_entry:
+                # 현재 재생 중인 곡이 없으면 새로 시작
+                log.info("No current entry, starting playback - queue has %d entries", len(player.playlist.entries))
                 player.play()
-            elif not player.is_playing:
-                log.info("Continuing playback - queue has %d entries", len(player.playlist.entries))
-                player.play(_continue=True)
+            elif player.is_stopped:
+                # 정지 상태면 시작
+                log.info("Player stopped, starting playback - queue has %d entries", len(player.playlist.entries))
+                player.play()
 
     async def on_player_entry_added(
         self,
@@ -1692,9 +1694,9 @@ class MusicBot(commands.Bot):
         if entry.author and entry.channel and not defer_serialize:
             await self.serialize_queue(player.voice_client.channel.guild)
 
-        # Start playback if player is stopped and this is the first entry
-        if player.is_stopped and not player.current_entry:
-            log.info("Player is stopped, starting playback with newly added entry")
+        # Start playback if nothing is currently playing
+        if not player.current_entry and not player.is_dead:
+            log.info("No song currently playing, starting playback with newly added entry")
             player.play()
 
     async def on_player_error(
