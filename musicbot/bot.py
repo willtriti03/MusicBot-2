@@ -8078,10 +8078,16 @@ class MusicBot(commands.Bot):
         ):
             o_vc = o_guild.voice_client
             # borrow this for logging sake.
-            close_code = (
-                o_vc._connection.ws._close_code  # pylint: disable=protected-access
-            )
-            state = o_vc._connection.state  # pylint: disable=protected-access
+            try:
+                if hasattr(o_vc, '_connection') and o_vc._connection:
+                    close_code = (
+                        o_vc._connection.ws._close_code  # pylint: disable=protected-access
+                    )
+                    state = o_vc._connection.state  # pylint: disable=protected-access
+                else:
+                    log.debug("VoiceClient has no _connection attribute")
+            except AttributeError as e:
+                log.debug("Could not access VoiceClient connection info: %s", e)
 
         # These conditions are met when API terminates a voice client.
         # This could be a user initiated disconnect, but we have no way to tell.
