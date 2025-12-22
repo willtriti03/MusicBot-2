@@ -1692,6 +1692,11 @@ class MusicBot(commands.Bot):
         if entry.author and entry.channel and not defer_serialize:
             await self.serialize_queue(player.voice_client.channel.guild)
 
+        # Start playback if player is stopped and this is the first entry
+        if player.is_stopped and not player.current_entry:
+            log.info("Player is stopped, starting playback with newly added entry")
+            player.play()
+
     async def on_player_error(
         self,
         player: MusicPlayer,  # pylint: disable=unused-argument
