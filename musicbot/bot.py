@@ -1076,8 +1076,20 @@ class MusicBot(commands.Bot):
                 await self.safe_send_message(entry.author, newmsg)
                 return
 
+            # autosimilar 음악은 항상 정보를 표시하도록 함
+            # autoplaylist 항목만 no_nowplaying_auto 설정의 영향을 받음
+            # autosimilar는 channel=None, author=None이지만 정보 표시가 필요함
             if self.config.no_nowplaying_auto and entry.from_auto_playlist:
-                return
+                # autosimilar 음악인지 확인 (autoplaylist와 구분)
+                is_autosimilar = False
+                if hasattr(entry, 'info') and entry.info:
+                    # info 객체의 data에서 플래그 확인
+                    if hasattr(entry.info, 'data') and entry.info.data:
+                        is_autosimilar = entry.info.data.get('__from_autosimilar', False)
+                
+                # autosimilar가 아니고 autoplaylist 항목인 경우에만 표시하지 않음
+                if not is_autosimilar:
+                    return
 
             if self.config.nowplaying_channels:
                 for potential_channel_id in self.config.nowplaying_channels:
@@ -1574,6 +1586,11 @@ class MusicBot(commands.Bot):
                                     continue
 
                                 try:
+                                    # autosimilar 항목임을 표시하기 위한 플래그 추가
+                                    if not hasattr(similar_entry, 'data'):
+                                        similar_entry.data = {}
+                                    similar_entry.data['__from_autosimilar'] = True
+                                    
                                     await player.playlist.add_entry_from_info(
                                         similar_entry,
                                         channel=None,
@@ -1627,7 +1644,8 @@ class MusicBot(commands.Bot):
 
         # 큐가 비어있는지 확인
         if not player.playlist.entries and not player.current_entry:
-            if not self.config.auto_playlist and not self.config.auto_similar:
+            server_state = self.server_data[guild.id]
+            if not self.config.auto_playlist and not server_state.auto_similar_enabled:
                 log.info(
                     "Queue is empty and auto-play features are disabled. Playback stopped."
                 )
@@ -1638,12 +1656,13 @@ class MusicBot(commands.Bot):
             return
 
         # 큐에 곡이 있으면 재생 시작
-        if player.is_stopped and player.playlist.entries:
-            log.debug("Starting playback from stopped state.")
-            player.play()
-        elif not player.is_stopped and player.playlist.entries:
-            log.debug("Continuing playback.")
-            player.play(_continue=True)
+        if player.playlist.entries:
+            if player.is_stopped:
+                log.info("Starting playback - queue has %d entries", len(player.playlist.entries))
+                player.play()
+            elif not player.is_playing:
+                log.info("Continuing playback - queue has %d entries", len(player.playlist.entries))
+                player.play(_continue=True)
 
     async def on_player_entry_added(
         self,
