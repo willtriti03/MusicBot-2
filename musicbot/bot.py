@@ -729,6 +729,38 @@ class MusicBot(commands.Bot):
 
             return known_voice_clients
 
+        async def cleanup_guild_voice_clients(reason: str) -> None:
+            log.warning(
+                "Clearing voice state for guild %s after %s.",
+                guild.id,
+                reason,
+            )
+
+            bot_voice_state = getattr(getattr(guild, "me", None), "voice", None)
+            if bot_voice_state and bot_voice_state.channel:
+                try:
+                    await guild.change_voice_state(channel=None)
+                except (discord.Forbidden, discord.HTTPException):
+                    if self.config.debug_mode:
+                        log.warning(
+                            "Failed to clear guild voice state during %s cleanup.",
+                            reason,
+                        )
+
+            for stale_vc in collect_guild_voice_clients():
+                try:
+                    await stale_vc.disconnect(force=True)
+                except (
+                    discord.ClientException,
+                    asyncio.exceptions.CancelledError,
+                    asyncio.exceptions.TimeoutError,
+                ):
+                    if self.config.debug_mode:
+                        log.warning(
+                            "Disconnect failed or was cancelled during %s cleanup.",
+                            reason,
+                        )
+
         # check for and return the bot's VoiceClient if we already have one,
         # even if py-cord only kept it in the internal voice client list.
         for vc in collect_guild_voice_clients():
@@ -772,8 +804,12 @@ class MusicBot(commands.Bot):
                 "Forcing disconnect on stale VoiceClient in guild:  %s", guild
             )
             try:
-                await vc.disconnect()
-            except (asyncio.exceptions.CancelledError, asyncio.exceptions.TimeoutError):
+                await vc.disconnect(force=True)
+            except (
+                discord.ClientException,
+                asyncio.exceptions.CancelledError,
+                asyncio.exceptions.TimeoutError,
+            ):
                 if self.config.debug_mode:
                     log.warning("Disconnect failed or was cancelled?")
 
@@ -815,6 +851,8 @@ class MusicBot(commands.Bot):
                     attempts,
                     channel,
                 )
+                await cleanup_guild_voice_clients("voice connection timeout")
+                await asyncio.sleep(1)
             except discord.ClientException as e:
                 if "Already connected to a voice channel." not in str(e):
                     raise exceptions.CommandError(str(e)) from e
@@ -849,8 +887,9 @@ class MusicBot(commands.Bot):
                         break
 
                     try:
-                        await vc.disconnect()
+                        await vc.disconnect(force=True)
                     except (
+                        discord.ClientException,
                         asyncio.exceptions.CancelledError,
                         asyncio.exceptions.TimeoutError,
                     ):
@@ -861,7 +900,7 @@ class MusicBot(commands.Bot):
                     client = recovered_vc
                     break
 
-                await self.disconnect_voice_client(guild)
+                await cleanup_guild_voice_clients("voice connection recovery")
             except asyncio.exceptions.CancelledError as e:
                 log.exception(
                     "MusicBot VoiceClient connection attempt was cancelled. No retry."
@@ -903,8 +942,9 @@ class MusicBot(commands.Bot):
             if player.voice_client:
                 log.debug("Disconnecting VoiceClient before we kill the MusicPlayer.")
                 try:
-                    await player.voice_client.disconnect()
+                    await player.voice_client.disconnect(force=True)
                 except (
+                    discord.ClientException,
                     asyncio.exceptions.CancelledError,
                     asyncio.exceptions.TimeoutError,
                 ):
@@ -934,8 +974,9 @@ class MusicBot(commands.Bot):
             if vc.guild and vc.guild == guild:
                 log.debug("Disconnecting a rogue VoiceClient in guild:  %s", guild)
                 try:
-                    await vc.disconnect()
+                    await vc.disconnect(force=True)
                 except (
+                    discord.ClientException,
                     asyncio.exceptions.CancelledError,
                     asyncio.exceptions.TimeoutError,
                 ):
@@ -958,8 +999,9 @@ class MusicBot(commands.Bot):
             if isinstance(vc, discord.VoiceClient):
                 log.warning("Disconnecting a non-guild VoiceClient...")
                 try:
-                    await vc.disconnect()
+                    await vc.disconnect(force=True)
                 except (
+                    discord.ClientException,
                     asyncio.exceptions.CancelledError,
                     asyncio.exceptions.TimeoutError,
                 ):
