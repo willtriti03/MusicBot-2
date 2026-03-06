@@ -85,6 +85,23 @@ class AudioFileCache:
         """Wrapper for self.cache.is_dir() for external use."""
         return self.cache_path.is_dir()
 
+    def has_cache_data(self) -> bool:
+        """Return True if the cache directory or cachemap currently has data."""
+        if self.cachemap_file.is_file():
+            return True
+
+        if not self.cache_path.is_dir():
+            return False
+
+        try:
+            next(self.cache_path.iterdir())
+            return True
+        except StopIteration:
+            return False
+        except OSError:
+            log.warning("Could not inspect audio cache directory contents.", exc_info=True)
+            return True
+
     def get_cache_size(self) -> Tuple[int, int]:
         """
         Returns AudioFileCache size as a two member tuple containing size_bytes and file_count.
@@ -249,6 +266,35 @@ class AudioFileCache:
             return self._delete_cache_dir()
 
         return True
+
+    def purge_audio_cache(self) -> bool:
+        """
+        Force delete the entire cache directory and cachemap regardless of config.
+        """
+        success = True
+
+        if self.cache_path.is_dir():
+            success = self._delete_cache_dir() and success
+
+        self.auto_playlist_cachemap = {}
+        if self.cachemap_file.is_file():
+            try:
+                self.cachemap_file.unlink()
+            except (OSError, PermissionError, IsADirectoryError):
+                log.warning(
+                    "Failed to delete autoplay cache map file:  %s",
+                    self.cachemap_file,
+                    exc_info=True,
+                )
+                success = False
+
+        if success:
+            self.size_bytes = 0
+            self.file_count = 0
+        else:
+            self.scan_audio_cache()
+
+        return success
 
     def handle_new_cache_entry(self, entry: "URLPlaylistEntry") -> None:
         """

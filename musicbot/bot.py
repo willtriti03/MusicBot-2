@@ -2693,7 +2693,9 @@ class MusicBot(commands.Bot):
             for guild in sorted(self.guilds, key=lambda s: int(s.id)):
                 f.write(f"{guild.id}: {guild.name}\n")
 
-        self.filecache.delete_old_audiocache(remove_dir=True)
+        if self.filecache.has_cache_data():
+            log.info("Purging audio cache on startup.")
+        self.filecache.purge_audio_cache()
 
     async def _on_ready_validate_configs(self) -> None:
         """
@@ -6190,14 +6192,14 @@ class MusicBot(commands.Bot):
             {command_prefix}cache
 
         Display cache storage info or clear cache files.
-        Valid options are:  info, update, clear
+        Valid options are:  info, update, clear, purge
         """
         opt = opt.lower()
-        if opt not in ["info", "update", "clear"]:
+        if opt not in ["info", "update", "clear", "purge"]:
             raise exceptions.CommandError(
                 self.str.get(
                     "cmd-cache-invalid-arg",
-                    'Invalid option "{0}" specified, use info or clear',
+                    'Invalid option "{0}" specified, use info, update, clear, or purge',
                 ).format(opt),
                 expire_in=30,
             )
@@ -6263,8 +6265,86 @@ class MusicBot(commands.Bot):
                 ),
                 delete_after=30,
             )
-        # TODO: maybe add a "purge" option that fully empties cache regardless of settings.
+
+        if opt == "purge":
+            return await self._purge_cache()
+
         return None
+
+    async def _purge_cache(self) -> CommandResponse:
+        """
+        Force delete all cached downloads regardless of retention settings.
+        """
+        if not self.filecache.has_cache_data():
+            return Response(
+                self.str.get(
+                    "cmd-cache-purge-no-cache",
+                    "No cache found to purge.",
+                ),
+                delete_after=30,
+            )
+
+        invalidated_entries = 0
+        guilds_to_serialize: Set[discord.Guild] = set()
+        seen_entries: Set[int] = set()
+
+        for guild_id, player in self.players.items():
+            guild = self.get_guild(guild_id)
+            if guild is not None:
+                guilds_to_serialize.add(guild)
+
+            entries_to_reset: List[EntryTypes] = list(player.playlist.entries)
+            if player.current_entry is not None:
+                entries_to_reset.append(player.current_entry)
+
+            for entry in entries_to_reset:
+                if not isinstance(entry, URLPlaylistEntry):
+                    continue
+
+                entry_id = id(entry)
+                if entry_id in seen_entries:
+                    continue
+                seen_entries.add(entry_id)
+
+                if entry.filename or entry.downloaded_bytes or entry.is_downloaded:
+                    invalidated_entries += 1
+
+                entry.filename = ""
+                entry.downloaded_bytes = 0
+                entry.cache_busted = False
+                entry._is_downloaded = False
+
+        success = self.filecache.purge_audio_cache()
+
+        for guild in guilds_to_serialize:
+            await self.serialize_queue(guild)
+
+        if success:
+            return Response(
+                self.str.get(
+                    "cmd-cache-purge-success",
+                    "Cache has been fully purged. Reset {0} queued download(s).",
+                ).format(invalidated_entries),
+                delete_after=30,
+            )
+
+        raise exceptions.CommandError(
+            self.str.get(
+                "cmd-cache-purge-failed",
+                "**Failed** to fully purge cache, check logs for more info...",
+            ),
+            expire_in=30,
+        )
+
+    @owner_only
+    async def cmd_purgecache(self) -> CommandResponse:
+        """
+        Usage:
+            {command_prefix}purgecache
+
+        Force delete all downloaded cache files regardless of storage settings.
+        """
+        return await self._purge_cache()
 
     async def cmd_queue(
         self,

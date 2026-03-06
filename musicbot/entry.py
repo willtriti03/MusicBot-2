@@ -290,6 +290,14 @@ class URLPlaylistEntry(BasePlaylistEntry):
         """Get the expected filename from info if available or None"""
         return self.info.get("__expected_filename", None)
 
+    @property
+    def is_downloaded(self) -> bool:
+        """Return True only when the cached file still exists on disk."""
+        if self._is_downloading:
+            return False
+
+        return bool(self.filename) and self._is_downloaded and os.path.isfile(self.filename)
+
     def __json__(self) -> Dict[str, Any]:
         """
         Handles representing this object as JSON.
@@ -1018,6 +1026,14 @@ class LocalFilePlaylistEntry(BasePlaylistEntry):
     def expected_filename(self) -> Optional[str]:
         """Get the expected filename from info if available or None"""
         return self.info.get("__expected_filename", None)
+
+    @property
+    def is_downloaded(self) -> bool:
+        """Return True only when the local media path still exists on disk."""
+        if self._is_downloading:
+            return False
+
+        return bool(self.filename) and self._is_downloaded and os.path.isfile(self.filename)
 
     def __json__(self) -> Dict[str, Any]:
         """
