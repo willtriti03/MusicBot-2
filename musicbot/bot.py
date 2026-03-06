@@ -706,18 +706,70 @@ class MusicBot(commands.Bot):
                 expire_in=30,
             )
 
-        # check for and return bots VoiceClient if we already have one.
-        vc = channel.guild.voice_client
-        if vc and isinstance(vc, (discord.VoiceClient, discord.StageChannel)):
-            # make sure it is usable
-            if vc.is_connected():
-                log.voicedebug(  # type: ignore[attr-defined]
-                    "Reusing bots VoiceClient from guild:  %s", channel.guild
+        guild = channel.guild
+
+        def collect_guild_voice_clients() -> List[Any]:
+            known_voice_clients: List[Any] = []
+
+            def register(vc: Any) -> None:
+                if vc and vc not in known_voice_clients:
+                    known_voice_clients.append(vc)
+
+            register(guild.voice_client)
+
+            for vc in self.voice_clients:
+                existing_guild = getattr(vc, "guild", None)
+                existing_channel = getattr(vc, "channel", None)
+                existing_channel_guild = (
+                    existing_channel.guild if existing_channel else None
                 )
+
+                if existing_guild == guild or existing_channel_guild == guild:
+                    register(vc)
+
+            return known_voice_clients
+
+        # check for and return the bot's VoiceClient if we already have one,
+        # even if py-cord only kept it in the internal voice client list.
+        for vc in collect_guild_voice_clients():
+            if not isinstance(vc, discord.VoiceClient):
+                log.warning(
+                    "Found non-VoiceClient voice protocol in guild %s, disconnecting it.",
+                    guild.id,
+                )
+                try:
+                    await vc.disconnect(force=True)
+                except (
+                    asyncio.exceptions.CancelledError,
+                    asyncio.exceptions.TimeoutError,
+                ):
+                    if self.config.debug_mode:
+                        log.warning("Disconnect failed or was cancelled?")
+                continue
+
+            if vc.is_connected():
+                if vc.channel and vc.channel != channel:
+                    log.warning(
+                        "Reusing connected VoiceClient in guild %s by moving from %s to %s.",
+                        guild.id,
+                        vc.channel,
+                        channel,
+                    )
+                    await vc.move_to(channel)
+
+                    if self.config.self_deafen:
+                        await guild.change_voice_state(
+                            channel=channel,
+                            self_deaf=True,
+                        )
+                else:
+                    log.voicedebug(  # type: ignore[attr-defined]
+                        "Reusing bot VoiceClient from guild:  %s", guild
+                    )
                 return vc
-            # or otherwise we kill it and start fresh.
+
             log.voicedebug(  # type: ignore[attr-defined]
-                "Forcing disconnect on stale VoiceClient in guild:  %s", channel.guild
+                "Forcing disconnect on stale VoiceClient in guild:  %s", guild
             )
             try:
                 await vc.disconnect()
@@ -763,6 +815,53 @@ class MusicBot(commands.Bot):
                     attempts,
                     channel,
                 )
+            except discord.ClientException as e:
+                if "Already connected to a voice channel." not in str(e):
+                    raise exceptions.CommandError(str(e)) from e
+
+                log.warning(
+                    "Voice connect reported an existing connection in guild %s. Attempting recovery.",
+                    guild.id,
+                )
+
+                recovered_vc: Optional[discord.VoiceClient] = None
+                for vc in collect_guild_voice_clients():
+                    if not isinstance(vc, discord.VoiceClient):
+                        try:
+                            await vc.disconnect(force=True)
+                        except (
+                            asyncio.exceptions.CancelledError,
+                            asyncio.exceptions.TimeoutError,
+                        ):
+                            if self.config.debug_mode:
+                                log.warning("Disconnect failed or was cancelled?")
+                        continue
+
+                    if vc.is_connected():
+                        if vc.channel and vc.channel != channel:
+                            await vc.move_to(channel)
+                            if self.config.self_deafen:
+                                await guild.change_voice_state(
+                                    channel=channel,
+                                    self_deaf=True,
+                                )
+                        recovered_vc = vc
+                        break
+
+                    try:
+                        await vc.disconnect()
+                    except (
+                        asyncio.exceptions.CancelledError,
+                        asyncio.exceptions.TimeoutError,
+                    ):
+                        if self.config.debug_mode:
+                            log.warning("Disconnect failed or was cancelled?")
+
+                if recovered_vc is not None:
+                    client = recovered_vc
+                    break
+
+                await self.disconnect_voice_client(guild)
             except asyncio.exceptions.CancelledError as e:
                 log.exception(
                     "MusicBot VoiceClient connection attempt was cancelled. No retry."
