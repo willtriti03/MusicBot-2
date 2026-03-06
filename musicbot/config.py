@@ -981,51 +981,62 @@ class Config:
             if config fails to be located or has not been configured.
         """
         config = configparser.ConfigParser(interpolation=None)
+        legacy_config_file = self.config_file.with_name("1_options.ini")
 
         # Check for options.ini and copy example ini if missing.
         if not self.config_file.is_file():
-            ini_file = self.config_file.with_suffix(".ini")
-            if ini_file.is_file():
-                try:
-                    # Explicit compat with python 3.8
-                    if sys.version_info >= (3, 9):
-                        shutil.move(ini_file, self.config_file)
-                    else:
-                        # shutil.move in 3.8 expects str and not path-like.
-                        shutil.move(str(ini_file), str(self.config_file))
-                    log.info(
-                        "Moving %s to %s, you should probably turn file extensions on.",
-                        ini_file,
-                        self.config_file,
-                    )
-                except (
-                    OSError,
-                    IsADirectoryError,
-                    NotADirectoryError,
-                    FileExistsError,
-                    PermissionError,
-                ) as e:
-                    log.exception(
-                        "Something went wrong while trying to move .ini to config file path."
-                    )
-                    raise HelpfulError(
-                        f"Config file move failed due to error:  {str(e)}",
-                        "Verify your config folder and files exist, and can be read by the bot.",
-                    ) from e
-
-            elif os.path.isfile(EXAMPLE_OPTIONS_FILE):
-                shutil.copy(EXAMPLE_OPTIONS_FILE, self.config_file)
+            if legacy_config_file.is_file():
                 log.warning(
-                    "Options file not found, copying example file:  %s",
-                    EXAMPLE_OPTIONS_FILE,
+                    "Options file not found at %s, using legacy config file %s instead."
+                    " Rename it back to %s to match the standard layout.",
+                    self.config_file,
+                    legacy_config_file,
+                    self.config_file,
                 )
-
+                self.config_file = legacy_config_file
             else:
-                raise HelpfulError(
-                    "Your config files are missing. Neither options.ini nor example_options.ini were found.",
-                    "Grab the files back from the archive or remake them yourself and copy paste the content "
-                    "from the repo. Stop removing important files!",
-                )
+                ini_file = self.config_file.with_suffix(".ini")
+                if ini_file.is_file():
+                    try:
+                        # Explicit compat with python 3.8
+                        if sys.version_info >= (3, 9):
+                            shutil.move(ini_file, self.config_file)
+                        else:
+                            # shutil.move in 3.8 expects str and not path-like.
+                            shutil.move(str(ini_file), str(self.config_file))
+                        log.info(
+                            "Moving %s to %s, you should probably turn file extensions on.",
+                            ini_file,
+                            self.config_file,
+                        )
+                    except (
+                        OSError,
+                        IsADirectoryError,
+                        NotADirectoryError,
+                        FileExistsError,
+                        PermissionError,
+                    ) as e:
+                        log.exception(
+                            "Something went wrong while trying to move .ini to config file path."
+                        )
+                        raise HelpfulError(
+                            f"Config file move failed due to error:  {str(e)}",
+                            "Verify your config folder and files exist, and can be read by the bot.",
+                        ) from e
+
+                elif os.path.isfile(EXAMPLE_OPTIONS_FILE):
+                    shutil.copy(EXAMPLE_OPTIONS_FILE, self.config_file)
+                    log.warning(
+                        "Options file not found, copying example file:  %s",
+                        EXAMPLE_OPTIONS_FILE,
+                    )
+
+                else:
+                    raise HelpfulError(
+                        "Your config files are missing. Neither options.ini nor example_options.ini were found.",
+                        "Grab the files back from the archive or remake them yourself and copy paste the content "
+                        "from the repo. Stop removing important files!",
+                    )
 
         # load the config and check if settings are configured.
         if not config.read(self.config_file, encoding="utf-8"):

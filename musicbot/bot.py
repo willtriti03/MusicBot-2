@@ -933,6 +933,24 @@ class MusicBot(commands.Bot):
         )
 
         async with self.aiolocks[_func_() + ":" + str(guild.id)]:
+            existing_player = self.players.get(guild.id)
+            guild_voice_client = guild.voice_client
+            has_connected_voice_client = bool(
+                isinstance(guild_voice_client, discord.VoiceClient)
+                and guild_voice_client.is_connected()
+            )
+
+            if existing_player and (
+                not existing_player.voice_client
+                or not existing_player.voice_client.is_connected()
+                or not has_connected_voice_client
+            ):
+                log.warning(
+                    "Removing stale MusicPlayer for guild %s before continuing.",
+                    guild.id,
+                )
+                await self.disconnect_voice_client(guild)
+
             if deserialize:
                 voice_client = await self.get_voice_client(channel)
                 player = await self.deserialize_queue(guild, voice_client)
@@ -4845,7 +4863,10 @@ class MusicBot(commands.Bot):
         )
 
     async def cmd_summon(
-        self, guild: discord.Guild, author: discord.Member, message: discord.Message
+        self,
+        guild: discord.Guild,
+        author: discord.Member,
+        message: Optional[discord.Message],
     ) -> CommandResponse:
         """
         Usage:
@@ -4865,14 +4886,20 @@ class MusicBot(commands.Bot):
             )
 
         player = self.get_player_in(guild)
-        if player and player.voice_client and guild == author.voice.channel.guild:
-            # NOTE:  .move_to() does not support setting self-deafen flag,
-            # nor respect flags set in initial connect call.
-            # await player.voice_client.move_to(author.voice.channel)
-            await guild.change_voice_state(
-                channel=author.voice.channel,
-                self_deaf=self.config.self_deafen,
-            )
+        if (
+            player
+            and player.voice_client
+            and player.voice_client.is_connected()
+            and guild == author.voice.channel.guild
+        ):
+            if player.voice_client.channel != author.voice.channel:
+                await player.voice_client.move_to(author.voice.channel)
+
+            if self.config.self_deafen:
+                await guild.change_voice_state(
+                    channel=author.voice.channel,
+                    self_deaf=True,
+                )
         else:
             player = await self.get_player(
                 author.voice.channel,
@@ -7520,6 +7547,7 @@ class MusicBot(commands.Bot):
 
                 if parsed:
                     command_name, args_str = parsed
+                    command_name = command_name.lstrip("!")
                     # Convert voice command to standard bot command format
                     # Create a new message content with the command prefix
                     if args_str:
