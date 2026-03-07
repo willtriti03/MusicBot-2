@@ -1075,10 +1075,21 @@ class MusicBot(commands.Bot):
 
         async with self.aiolocks[_func_() + ":" + str(guild.id)]:
             existing_player = self.players.get(guild.id)
+            player_voice_client = existing_player.voice_client if existing_player else None
             guild_voice_client = guild.voice_client
             has_connected_voice_client = bool(
+                player_voice_client and player_voice_client.is_connected()
+            ) or bool(
                 isinstance(guild_voice_client, discord.VoiceClient)
                 and guild_voice_client.is_connected()
+            ) or any(
+                isinstance(vc, discord.VoiceClient)
+                and vc.is_connected()
+                and (
+                    vc.guild == guild
+                    or getattr(getattr(vc, "channel", None), "guild", None) == guild
+                )
+                for vc in self.voice_clients
             )
 
             if existing_player and (
@@ -7942,10 +7953,18 @@ class MusicBot(commands.Bot):
                         if "not in a voice channel" in str(e):
                             try:
                                 await self.cmd_summon(message.guild, message.author, message)
-                                # summon 후 다시 시도
-                                handler_kwargs["player"] = await self.get_player(
-                                    message.author.voice.channel
-                                )
+                                player = self.get_player_in(message.guild)
+                                if (
+                                    not player
+                                    or not player.voice_client
+                                    or not player.voice_client.is_connected()
+                                ):
+                                    player = await self.get_player(
+                                        message.author.voice.channel,
+                                        create=True,
+                                    )
+
+                                handler_kwargs["player"] = player
                             except Exception as summon_error:
                                 # summon 실패 시 원래 에러를 다시 발생
                                 raise e
