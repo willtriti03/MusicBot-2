@@ -24,7 +24,7 @@ import certifi  # type: ignore[import-untyped, unused-ignore]
 import discord
 import yt_dlp as youtube_dl  # type: ignore[import-untyped]
 
-from discord.commands import ApplicationContext, AutocompleteContext, Option
+from discord.commands import ApplicationContext
 from discord.ext import commands
 from . import downloader, exceptions
 from .aliases import Aliases, AliasesDefault
@@ -162,6 +162,8 @@ class MusicBot(commands.Bot):
 
         # Configuration and permission settings
         self.config = Config(self._config_file)
+        self.config.command_prefix = "!"
+        self.config.enable_options_per_guild = False
         log.info("Config initialized.")
 
         log.info("Loading permissions...")
@@ -2998,240 +3000,187 @@ class MusicBot(commands.Bot):
         if self._slash_commands_registered:
             return
 
+        slash_command = getattr(self, "slash_command", None)
+        if not callable(slash_command):
+            log.warning("Installed discord library does not support slash commands.")
+            return
+
+        try:
+            @slash_command(
+                name="play",
+                description="Add a song URL or search query to the queue.",
+                guild_only=True,
+            )
+            async def slash_play(ctx: ApplicationContext, query: str) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "play",
+                    lambda: self._slash_cmd_play(ctx, query),
+                    default_response="Queued request has been processed.",
+                    default_ephemeral=True,
+                )
+
+            @slash_command(
+                name="stream",
+                description="Queue a media stream without downloading first.",
+                guild_only=True,
+            )
+            async def slash_stream(ctx: ApplicationContext, query: str) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "stream",
+                    lambda: self._slash_cmd_stream(ctx, query),
+                    default_response="Stream request has been processed.",
+                    default_ephemeral=True,
+                )
+
+            @slash_command(
+                name="summon",
+                description="Summon the bot to your current voice channel.",
+                guild_only=True,
+            )
+            async def slash_summon(ctx: ApplicationContext) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "summon",
+                    lambda: self._slash_cmd_summon(ctx),
+                )
+
+            @slash_command(
+                name="skip",
+                description="Skip the current track.",
+                guild_only=True,
+            )
+            async def slash_skip(
+                ctx: ApplicationContext, force: bool = False
+            ) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "skip",
+                    lambda: self._slash_cmd_skip(ctx, force),
+                )
+
+            @slash_command(
+                name="pause",
+                description="Pause the current track.",
+                guild_only=True,
+            )
+            async def slash_pause(ctx: ApplicationContext) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "pause",
+                    lambda: self._slash_cmd_pause(ctx),
+                )
+
+            @slash_command(
+                name="resume",
+                description="Resume playback.",
+                guild_only=True,
+            )
+            async def slash_resume(ctx: ApplicationContext) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "resume",
+                    lambda: self._slash_cmd_resume(ctx),
+                    default_response="Resumed playback.",
+                    default_ephemeral=True,
+                )
+
+            @slash_command(
+                name="queue",
+                description="Show the current music queue.",
+                guild_only=True,
+            )
+            async def slash_queue(ctx: ApplicationContext, page: int = 0) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "queue",
+                    lambda: self._slash_cmd_queue(ctx, page),
+                    default_response="Posted the queue in this channel.",
+                    default_ephemeral=True,
+                )
+
+            @slash_command(
+                name="np",
+                description="Show the current playing track.",
+                guild_only=True,
+            )
+            async def slash_np(ctx: ApplicationContext) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "np",
+                    lambda: self._slash_cmd_np(ctx),
+                    default_response="Posted now playing in this channel.",
+                    default_ephemeral=True,
+                )
+
+            @slash_command(
+                name="volume",
+                description="Show or change playback volume.",
+                guild_only=True,
+            )
+            async def slash_volume(
+                ctx: ApplicationContext, level: str = ""
+            ) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "volume",
+                    lambda: self._slash_cmd_volume(ctx, level),
+                )
+
+            @slash_command(
+                name="disconnect",
+                description="Disconnect the bot from voice.",
+                guild_only=True,
+            )
+            async def slash_disconnect(ctx: ApplicationContext) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "disconnect",
+                    lambda: self._slash_cmd_disconnect(ctx),
+                )
+
+            @slash_command(
+                name="purgecache",
+                description="Delete all downloaded audio cache files.",
+                guild_only=True,
+            )
+            async def slash_purgecache(ctx: ApplicationContext) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "purgecache",
+                    lambda: self._slash_cmd_purgecache(ctx),
+                )
+
+            @slash_command(
+                name="listen",
+                description="Start listening for voice commands in the voice channel.",
+                guild_only=True,
+            )
+            async def slash_listen(ctx: ApplicationContext) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "listen",
+                    lambda: self._slash_cmd_listen(ctx),
+                )
+
+            @slash_command(
+                name="stoplisten",
+                description="Stop listening for voice commands.",
+                guild_only=True,
+            )
+            async def slash_stoplisten(ctx: ApplicationContext) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "stoplisten",
+                    lambda: self._slash_cmd_stoplisten(ctx),
+                )
+
+        except Exception:
+            log.exception("Slash command registration failed; continuing without slash commands.")
+            return
+
         self._slash_commands_registered = True
-
-        @self.slash_command(
-            name="play",
-            description="Add a song URL or search query to the queue.",
-            guild_only=True,
-        )
-        async def slash_play(
-            ctx: ApplicationContext,
-            query: Option(
-                str,
-                "Song URL or search query.",
-                autocomplete=self._slash_query_autocomplete,
-            ),
-        ) -> None:
-            await self._run_slash_command(
-                ctx,
-                "play",
-                lambda: self._slash_cmd_play(ctx, query),
-                default_response="Queued request has been processed.",
-                default_ephemeral=True,
-            )
-
-        @self.slash_command(
-            name="stream",
-            description="Queue a media stream without downloading first.",
-            guild_only=True,
-        )
-        async def slash_stream(
-            ctx: ApplicationContext,
-            query: Option(
-                str,
-                "Stream URL or search query.",
-                autocomplete=self._slash_query_autocomplete,
-            ),
-        ) -> None:
-            await self._run_slash_command(
-                ctx,
-                "stream",
-                lambda: self._slash_cmd_stream(ctx, query),
-                default_response="Stream request has been processed.",
-                default_ephemeral=True,
-            )
-
-        @self.slash_command(
-            name="summon",
-            description="Summon the bot to your current voice channel.",
-            guild_only=True,
-        )
-        async def slash_summon(ctx: ApplicationContext) -> None:
-            await self._run_slash_command(
-                ctx,
-                "summon",
-                lambda: self._slash_cmd_summon(ctx),
-            )
-
-        @self.slash_command(
-            name="skip",
-            description="Skip the current track.",
-            guild_only=True,
-        )
-        async def slash_skip(
-            ctx: ApplicationContext,
-            force: Option(bool, "Force skip immediately.", default=False) = False,
-        ) -> None:
-            await self._run_slash_command(
-                ctx,
-                "skip",
-                lambda: self._slash_cmd_skip(ctx, force),
-            )
-
-        @self.slash_command(
-            name="pause",
-            description="Pause the current track.",
-            guild_only=True,
-        )
-        async def slash_pause(ctx: ApplicationContext) -> None:
-            await self._run_slash_command(
-                ctx,
-                "pause",
-                lambda: self._slash_cmd_pause(ctx),
-            )
-
-        @self.slash_command(
-            name="resume",
-            description="Resume playback.",
-            guild_only=True,
-        )
-        async def slash_resume(ctx: ApplicationContext) -> None:
-            await self._run_slash_command(
-                ctx,
-                "resume",
-                lambda: self._slash_cmd_resume(ctx),
-                default_response="Resumed playback.",
-                default_ephemeral=True,
-            )
-
-        @self.slash_command(
-            name="queue",
-            description="Show the current music queue.",
-            guild_only=True,
-        )
-        async def slash_queue(
-            ctx: ApplicationContext,
-            page: Option(int, "Queue page number.", default=0) = 0,
-        ) -> None:
-            await self._run_slash_command(
-                ctx,
-                "queue",
-                lambda: self._slash_cmd_queue(ctx, page),
-                default_response="Posted the queue in this channel.",
-                default_ephemeral=True,
-            )
-
-        @self.slash_command(
-            name="np",
-            description="Show the current playing track.",
-            guild_only=True,
-        )
-        async def slash_np(ctx: ApplicationContext) -> None:
-            await self._run_slash_command(
-                ctx,
-                "np",
-                lambda: self._slash_cmd_np(ctx),
-                default_response="Posted now playing in this channel.",
-                default_ephemeral=True,
-            )
-
-        @self.slash_command(
-            name="volume",
-            description="Show or change playback volume.",
-            guild_only=True,
-        )
-        async def slash_volume(
-            ctx: ApplicationContext,
-            level: Option(
-                str,
-                "Volume value, for example 50, +10, or -10.",
-                default="",
-            ) = "",
-        ) -> None:
-            await self._run_slash_command(
-                ctx,
-                "volume",
-                lambda: self._slash_cmd_volume(ctx, level),
-            )
-
-        @self.slash_command(
-            name="disconnect",
-            description="Disconnect the bot from voice.",
-            guild_only=True,
-        )
-        async def slash_disconnect(ctx: ApplicationContext) -> None:
-            await self._run_slash_command(
-                ctx,
-                "disconnect",
-                lambda: self._slash_cmd_disconnect(ctx),
-            )
-
-        @self.slash_command(
-            name="purgecache",
-            description="Delete all downloaded audio cache files.",
-            guild_only=True,
-        )
-        async def slash_purgecache(ctx: ApplicationContext) -> None:
-            await self._run_slash_command(
-                ctx,
-                "purgecache",
-                lambda: self._slash_cmd_purgecache(ctx),
-            )
-
-        @self.slash_command(
-            name="listen",
-            description="Start listening for voice commands in the voice channel.",
-            guild_only=True,
-        )
-        async def slash_listen(ctx: ApplicationContext) -> None:
-            await self._run_slash_command(
-                ctx,
-                "listen",
-                lambda: self._slash_cmd_listen(ctx),
-            )
-
-        @self.slash_command(
-            name="stoplisten",
-            description="Stop listening for voice commands.",
-            guild_only=True,
-        )
-        async def slash_stoplisten(ctx: ApplicationContext) -> None:
-            await self._run_slash_command(
-                ctx,
-                "stoplisten",
-                lambda: self._slash_cmd_stoplisten(ctx),
-            )
-
-    async def _slash_query_autocomplete(
-        self, ctx: AutocompleteContext
-    ) -> List[str]:
-        """Provide lightweight suggestions for slash command query fields."""
-        value = (ctx.value or "").strip().lower()
-        suggestions: List[str] = []
-        seen: Set[str] = set()
-
-        def _add_suggestion(item: str) -> None:
-            text = item.strip().replace("\n", " ")
-            if not text:
-                return
-            text = text[:100]
-            if text in seen:
-                return
-            if value and value not in text.lower():
-                return
-            seen.add(text)
-            suggestions.append(text)
-
-        for example in (
-            "https://www.youtube.com/watch?v=",
-            "https://youtu.be/",
-            "artist - song title",
-            "playlist url",
-        ):
-            _add_suggestion(example)
-
-        guild = self.get_guild(ctx.interaction.guild_id) if ctx.interaction.guild_id else None
-        if guild:
-            player = self.get_player_in(guild)
-            if player and player.current_entry and player.current_entry.title:
-                _add_suggestion(player.current_entry.title)
-            if player:
-                for entry in list(player.playlist.entries)[:10]:
-                    if entry.title:
-                        _add_suggestion(entry.title)
-
-        return suggestions[:20]
 
     def _get_slash_guild(self, ctx: ApplicationContext) -> discord.Guild:
         guild = ctx.guild
@@ -7816,51 +7765,10 @@ class MusicBot(commands.Bot):
 
         If enabled by owner, set an override for command prefix with a custom prefix.
         """
-        if self.config.enable_options_per_guild:
-            # TODO: maybe filter odd unicode or bad words...
-            # Filter custom guild emoji, bot can only use in-guild emoji.
-            emoji_match = re.match(r"^<a?:(.+):(\d+)>$", prefix)
-            if emoji_match:
-                _e_name, e_id = emoji_match.groups()
-                try:
-                    emoji = self.get_emoji(int(e_id))
-                except ValueError:
-                    emoji = None
-                if not emoji:
-                    raise exceptions.CommandError(
-                        self.str.get(
-                            "cmd-setprefix-emoji-unavailable",
-                            "Custom emoji must be from this server to use as a prefix.",
-                        ),
-                        expire_in=30,
-                    )
-
-            if "clear" == prefix:
-                self.server_data[guild.id].command_prefix = ""
-                await self.server_data[guild.id].save_guild_options_file()
-                return Response(
-                    self.str.get(
-                        "cmd-setprefix-cleared",
-                        "Server command prefix is cleared.",
-                    )
-                )
-
-            self.server_data[guild.id].command_prefix = prefix
-            await self.server_data[guild.id].save_guild_options_file()
-            return Response(
-                self.str.get(
-                    "cmd-setprefix-changed",
-                    "Server command prefix is now:  {0}",
-                ).format(prefix),
-                delete_after=60,
-            )
-
-        raise exceptions.CommandError(
-            self.str.get(
-                "cmd-setprefix-disabled",
-                "Prefix per server is not enabled!",
-            ),
-            expire_in=30,
+        del guild, prefix
+        return Response(
+            "Command prefix is fixed to `!`. Use slash commands for Discord command completion.",
+            delete_after=30,
         )
 
     @owner_only
