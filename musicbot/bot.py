@@ -3282,13 +3282,20 @@ class MusicBot(commands.Bot):
         command: str,
         error: exceptions.MusicbotException,
     ) -> None:
-        log.error(
-            "Error in slash %s: %s: %s",
-            command,
-            error.__class__.__name__,
-            error.message,
-            exc_info=True,
-        )
+        if isinstance(error, exceptions.CommandError):
+            log.warning(
+                "Error in slash %s: %s: %s",
+                command,
+                error.__class__.__name__,
+                error.message,
+            )
+        else:
+            log.error(
+                "Error in slash %s: %s: %s",
+                command,
+                error.__class__.__name__,
+                error.message,
+            )
 
         delete_after = error.expire_in if self.config.delete_messages else None
         if self.config.embeds:
@@ -5615,24 +5622,26 @@ class MusicBot(commands.Bot):
                 )
             )
 
+        voice_channel = author.voice.channel
+
         player = self.get_player_in(guild)
         if (
             player
             and player.voice_client
             and player.voice_client.is_connected()
-            and guild == author.voice.channel.guild
+            and guild == voice_channel.guild
         ):
-            if player.voice_client.channel != author.voice.channel:
-                await player.voice_client.move_to(author.voice.channel)
+            if player.voice_client.channel != voice_channel:
+                await player.voice_client.move_to(voice_channel)
 
             if self.config.self_deafen:
                 await guild.change_voice_state(
-                    channel=author.voice.channel,
+                    channel=voice_channel,
                     self_deaf=True,
                 )
         else:
             player = await self.get_player(
-                author.voice.channel,
+                voice_channel,
                 create=True,
                 deserialize=self.config.persistent_queue,
             )
@@ -5642,15 +5651,15 @@ class MusicBot(commands.Bot):
 
         log.info(
             "Joining %s/%s",
-            author.voice.channel.guild.name,
-            author.voice.channel.name,
+            voice_channel.guild.name,
+            voice_channel.name,
         )
 
         self.server_data[guild.id].last_np_msg = message
 
         return Response(
             self.str.get("cmd-summon-reply", "Connected to `{0.name}`").format(
-                author.voice.channel
+                voice_channel
             ),
             delete_after=30,
         )

@@ -800,6 +800,11 @@ class Config:
 
         # Make the registry check for missing data in the INI file.
         self.register.update_missing_config()
+        self.register.ini_missing_options = {
+            option
+            for option in self.register.ini_missing_options
+            if not (option.section == "MusicBot" and option.option == "AutoSimilar")
+        }
 
         if self.register.ini_missing_sections:
             sections_str = ", ".join(
