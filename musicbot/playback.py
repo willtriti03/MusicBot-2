@@ -25,6 +25,8 @@ class GuildPlaybackSession:
         self.voice_client: Optional[discord.VoiceClient] = None
         self.channel_id: Optional[int] = None
         self.connect_generation: int = 0
+        self.connecting: bool = False
+        self.connect_reason: str = ""
         self.last_disconnect_reason: str = ""
         self.resume_pending: bool = False
 
