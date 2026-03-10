@@ -528,7 +528,7 @@ def opt_check_updates() -> None:
     Runs a collection of git and pip commands and logs if updates are available.
     """
     log.info(
-        "\nSkipping live update checks. Runtime is expected to be pinned via requirements.lock and a dedicated virtual environment."
+        "\nSkipping live update checks. Runtime is expected to be pinned via requirements.lock in the current Python environment."
     )
 
 
@@ -929,9 +929,9 @@ def main() -> None:
                     "This is an error importing MusicBot or a dependency package."
                 ),
                 solution=(
-                    "Create or refresh the dedicated virtual environment and install locked dependencies.\n"
+                    "Install the locked dependencies into the Python environment you are using to run MusicBot.\n"
                     "Recommended command:\n"
-                    "  python3 -m venv .venv && ./.venv/bin/python -m pip install -r requirements.lock"
+                    "  python3 -m pip install -r requirements.lock"
                 ),
                 footnote=(
                     "MusicBot no longer installs or upgrades dependencies automatically at runtime."

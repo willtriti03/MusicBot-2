@@ -15,8 +15,8 @@ After=network.target
 # Replace mbdirectory to the file path where MusicBot was cloned into.
 WorkingDirectory=mbdirectory
 
-# Create a dedicated virtual environment in the project root and use it here.
-ExecStart=mbdirectory/.venv/bin/python mbdirectory/run.py --no-checks
+# Replace python path as needed for your system Python.
+ExecStart=/usr/bin/python3 mbdirectory/run.py --no-checks
 
 # Set the condition under which the service should be restarted.
 # Using on-failure allows the bot's shutdown command to actually stop the service.
