@@ -158,6 +158,7 @@ class MusicBot(commands.Bot):
         self.players: Dict[int, MusicPlayer] = {}
         self.playback_sessions: Dict[int, GuildPlaybackSession] = {}
         self._slash_commands_registered: bool = False
+        self._slash_sync_task: Optional[asyncio.Task[Any]] = None
 
         # Configuration and permission settings
         self.config = Config(self._config_file)
@@ -2471,6 +2472,7 @@ class MusicBot(commands.Bot):
 
         # handle start up and teardown.
         try:
+            log.info("Attempting Discord login and gateway connection...")
             await self.start(*self.config.auth)
             log.info("MusicBot is now doing shutdown steps...")
             if self.exit_signal is None:
@@ -2788,7 +2790,7 @@ class MusicBot(commands.Bot):
                 # context switch to give scheduled task an execution window.
                 await asyncio.sleep(0)
 
-        await self._sync_registered_slash_commands()
+        self._schedule_slash_sync("initial ready")
 
     async def _on_ready_always(self) -> None:
         """
@@ -3505,6 +3507,25 @@ class MusicBot(commands.Bot):
             len(self.pending_application_commands),
             len(guild_ids),
         )
+
+    def _schedule_slash_sync(self, reason: str = "") -> None:
+        """Schedule slash sync in the background so startup is not blocked."""
+        if self._slash_sync_task and not self._slash_sync_task.done():
+            return
+
+        async def _runner() -> None:
+            if reason:
+                log.info("Scheduling slash command sync: %s", reason)
+            await self._sync_registered_slash_commands()
+
+        task = self.loop.create_task(_runner(), name="slash_sync")
+        self._slash_sync_task = task
+
+        def _clear(_task: asyncio.Task[Any]) -> None:
+            if self._slash_sync_task is _task:
+                self._slash_sync_task = None
+
+        task.add_done_callback(_clear)
 
     def _get_song_url_or_none(
         self, url: str, player: Optional[MusicPlayer]
@@ -8822,6 +8843,8 @@ class MusicBot(commands.Bot):
         """Event called by discord.py when the Client has connected to the API."""
         if self.init_ok:
             log.info("MusicBot has become connected.")
+        else:
+            log.info("Connected to Discord gateway, waiting for ready event...")
 
     async def on_disconnect(self) -> None:
         """Event called by discord.py any time bot is disconnected, or fails to connect."""
@@ -9080,7 +9103,7 @@ class MusicBot(commands.Bot):
 
         log.debug("Creating data folder for guild %s", guild.id)
         self.config.data_path.joinpath(str(guild.id)).mkdir(exist_ok=True)
-        await self._sync_registered_slash_commands()
+        self._schedule_slash_sync(f"guild join {guild.id}")
 
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         """
