@@ -162,18 +162,29 @@ class MusicBot(commands.Bot):
 
         # Configuration and permission settings
         self.config = Config(self._config_file)
+        log.info("Config initialized.")
+
+        log.info("Loading permissions...")
         self.permissions = Permissions(self._perms_file)
         self.permissions.set_owner_id(self.config.owner_id)
+
+        log.info("Loading i18n strings...")
         self.str = Json(self.config.i18n_file)
 
         # `self.aliases_file`이 None이 아닌지 확인한 후 초기화
         if self.config.usealias and self.aliases_file is not None:
+            log.info("Loading command aliases...")
             self.aliases = Aliases(self.aliases_file)
 
         # Additional setups
+        log.info("Initializing autoplaylist manager...")
         self.playlist_mgr = AutoPlaylistManager(self)
         self.aiolocks: DefaultDict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+        log.info("Initializing audio cache manager...")
         self.filecache = AudioFileCache(self)
+
+        log.info("Initializing downloader...")
         self.downloader = downloader.Downloader(self)
 
         # Factory function for server-specific data
@@ -196,7 +207,10 @@ class MusicBot(commands.Bot):
         self.voice_recognition_handler = VoiceRecognitionHandler(bot_name)
         self.voice_listener = VoiceListener(self, self.voice_recognition_handler)
         log.info("Voice recognition handler and listener initialized")
+
+        log.info("Registering slash commands...")
         self._register_slash_commands()
+        log.info("MusicBot core initialization completed.")
 
 
     async def setup_hook(self) -> None:

@@ -932,6 +932,8 @@ class Config:
         if self.enable_local_media and not self.media_file_dir.is_dir():
             self.media_file_dir.mkdir(exist_ok=True)
 
+        log.info("Finished config validation.")
+
     async def async_validate(self, bot: "MusicBot") -> None:
         """
         Validation logic for bot settings that depends on data from async services.
