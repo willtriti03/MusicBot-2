@@ -363,6 +363,13 @@ class MusicPlayer(EventEmitter, Serializable):
         session = self.bot.get_playback_session(guild)
         session.sync_state()
 
+        if session.connecting:
+            log.warning(
+                "Voice connection is already being recovered in guild %s, waiting for the active attempt instead of starting another.",
+                guild.id,
+            )
+            return False
+
         if session.voice_client and session.voice_client.is_connected():
             if self.voice_client is not session.voice_client:
                 log.warning(

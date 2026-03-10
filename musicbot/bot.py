@@ -853,7 +853,12 @@ class MusicBot(commands.Bot):
                         if self.config.debug_mode:
                             log.warning("Disconnect failed or was cancelled?")
 
-                max_timeout = VOICE_CLIENT_RECONNECT_TIMEOUT * VOICE_CLIENT_MAX_RETRY_CONNECT
+                max_retry_connect = (
+                    1
+                    if reason == "playback recovery"
+                    else VOICE_CLIENT_MAX_RETRY_CONNECT
+                )
+                max_timeout = VOICE_CLIENT_RECONNECT_TIMEOUT * max_retry_connect
                 attempts = 0
                 while True:
                     attempts += 1
@@ -4233,6 +4238,14 @@ class MusicBot(commands.Bot):
             return
 
         async with lock:
+            session = self.get_playback_session(guild)
+            if session.connecting:
+                log.debug(
+                    "Voice reconnect is already in progress for guild %s, skipping auto-pause handling.",
+                    guild.id,
+                )
+                return
+
             if not player.voice_client.is_connected():
                 if self.loop:
                     naptime = 3 * (1 + _lc)
@@ -8932,7 +8945,7 @@ class MusicBot(commands.Bot):
         if o_guild is not None:
             session = self.get_playback_session(o_guild)
             if session.connecting:
-                log.warning(
+                log.debug(
                     "Ignoring API voice disconnect while a connect attempt is active in guild %s (reason=%s).",
                     o_guild.id,
                     session.connect_reason or "unspecified",
