@@ -9,6 +9,7 @@ from enum import Enum
 from threading import Thread
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+import discord
 from discord import AudioSource, FFmpegPCMAudio, PCMVolumeTransformer, VoiceClient
 
 from .constructs import Serializable, Serializer, SkipState
@@ -340,6 +341,69 @@ class MusicPlayer(EventEmitter, Serializable):
         )
         self.loop.create_task(self._play(_continue=_continue))
 
+    def _get_guild(self) -> Optional["discord.Guild"]:
+        guild = getattr(self.voice_client, "guild", None)
+        if guild is not None:
+            return guild
+
+        channel = getattr(self.voice_client, "channel", None)
+        return getattr(channel, "guild", None)
+
+    async def _ensure_voice_connection(self) -> bool:
+        """
+        Try to refresh or recover the voice client before playback starts.
+        """
+        if self.voice_client and self.voice_client.is_connected():
+            return True
+
+        guild = self._get_guild()
+        if guild is None:
+            return False
+
+        session = self.bot.get_playback_session(guild)
+        session.sync_state()
+
+        if session.voice_client and session.voice_client.is_connected():
+            if self.voice_client is not session.voice_client:
+                log.warning(
+                    "Refreshing disconnected MusicPlayer voice client in guild %s before playback.",
+                    guild.id,
+                )
+                self.voice_client = session.voice_client
+            return True
+
+        target_channel = None
+        if session.channel_id is not None:
+            candidate = self.bot.get_channel(session.channel_id)
+            if isinstance(candidate, (discord.VoiceChannel, discord.StageChannel)):
+                target_channel = candidate
+
+        if target_channel is None:
+            candidate = getattr(self.voice_client, "channel", None)
+            if isinstance(candidate, (discord.VoiceChannel, discord.StageChannel)):
+                target_channel = candidate
+
+        if target_channel is None:
+            log.warning(
+                "Cannot recover voice connection for guild %s, no target voice channel is known.",
+                guild.id,
+            )
+            return False
+
+        try:
+            self.voice_client = await session.ensure_connected(
+                target_channel,
+                reason="playback recovery",
+            )
+        except Exception:
+            log.exception(
+                "Failed to recover voice connection before playback in guild %s.",
+                guild.id,
+            )
+            return False
+
+        return bool(self.voice_client and self.voice_client.is_connected())
+
     async def _play(self, _continue: bool = False) -> None:
         """
         Plays the next entry from the playlist, or resumes playback of the current entry if paused.
@@ -384,6 +448,34 @@ class MusicPlayer(EventEmitter, Serializable):
 
                 # In-case there was a player, kill it. RIP.
                 self._kill_current_player()
+
+                if not await self._ensure_voice_connection():
+                    guild = self._get_guild()
+                    if guild is not None:
+                        log.warning(
+                            "MusicPlayer lost voice connection before playback in guild %s, returning entry to the queue.",
+                            guild.id,
+                        )
+                    else:
+                        log.warning(
+                            "MusicPlayer lost voice connection before playback, returning entry to the queue."
+                        )
+
+                    self.playlist.entries.appendleft(entry)
+                    self.state = MusicPlayerState.STOPPED
+
+                    if guild is not None and self.bot.config.persistent_queue:
+                        self.loop.create_task(self.bot.serialize_queue(guild))
+
+                    self.emit(
+                        "error",
+                        player=self,
+                        entry=entry,
+                        ex=FFmpegWarning(
+                            "Voice connection was lost before playback started."
+                        ),
+                    )
+                    return
 
                 boptions = "-nostdin"
                 # aoptions = "-vn -b:a 192k"

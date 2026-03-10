@@ -134,7 +134,7 @@ class MusicBot(commands.Bot):
         intents.typing = False
         intents.presences = False
         
-        super().__init__(command_prefix="!", intents=intents, auto_sync_commands=False)
+        super().__init__(command_prefix="/", intents=intents, auto_sync_commands=False)
 
         log.info("Initializing MusicBot %s", BOTVERSION)
         load_opus_lib()
@@ -162,7 +162,7 @@ class MusicBot(commands.Bot):
 
         # Configuration and permission settings
         self.config = Config(self._config_file)
-        self.config.command_prefix = "!"
+        self.config.command_prefix = "/"
         self.config.enable_options_per_guild = False
         log.info("Config initialized.")
 
@@ -5675,7 +5675,7 @@ class MusicBot(commands.Bot):
         voice_client = guild.voice_client
         if not voice_client or not voice_client.is_connected():
             raise exceptions.CommandError(
-                "Bot must be in a voice channel! Use !summon first."
+                "Bot must be in a voice channel! Use /summon first."
             )
 
         # 이미 듣고 있는지 확인
@@ -7767,7 +7767,7 @@ class MusicBot(commands.Bot):
         """
         del guild, prefix
         return Response(
-            "Command prefix is fixed to `!`. Use slash commands for Discord command completion.",
+            "Command prefix is fixed to `/`. Use slash commands for Discord command completion.",
             delete_after=30,
         )
 
