@@ -655,30 +655,21 @@ class VoiceListener:
         # player 파라미터 처리
         if params.pop("player", None):
             if member.voice and member.voice.channel:
-                try:
-                    handler_kwargs["player"] = await self.bot.get_player(member.voice.channel)
-                except Exception as e:
-                    # 봇이 음성 채널에 없으면 자동으로 summon 시도
-                    if "not in a voice channel" in str(e):
-                        try:
-                            # 임시로 message 객체 생성 (summon에 필요)
-                            # 실제로는 message가 없어도 summon이 작동하도록 수정 필요할 수 있음
-                            # 하지만 일단 시도해봄
-                            from musicbot.constructs import Response
-                            # cmd_summon을 직접 호출 (message 없이도 작동하도록)
-                            try:
-                                # message가 없어도 summon이 작동하도록 수정 필요
-                                # 일단 임시로 None을 전달하고, summon 함수가 처리하도록 함
-                                await self.bot.cmd_summon(guild, member, None)
-                                # summon 후 다시 시도
-                                handler_kwargs["player"] = await self.bot.get_player(member.voice.channel)
-                            except Exception as summon_error:
-                                # summon 실패 시 원래 에러를 다시 발생
-                                raise e
-                        except Exception:
-                            raise e
-                    else:
-                        raise
+                auto_connect_commands = {
+                    "play",
+                    "shuffleplay",
+                    "playnext",
+                    "playnow",
+                    "stream",
+                }
+                handler_kwargs["player"] = await self.bot.get_player(
+                    member.voice.channel,
+                    create=command in auto_connect_commands,
+                    deserialize=(
+                        command in auto_connect_commands
+                        and self.bot.config.persistent_queue
+                    ),
+                )
             else:
                 raise Exception("이 명령어는 음성 채널에 있어야 합니다.")
 

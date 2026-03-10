@@ -403,37 +403,51 @@ class MusicPlayer(EventEmitter, Serializable):
                     aoptions,
                     entry.filename,
                 )
+                try:
+                    ffmpeg_source = FFmpegPCMAudio(
+                        entry.filename,
+                        before_options=boptions,
+                        options=aoptions,
+                        stderr=subprocess.PIPE,
+                    )
 
-                # Create FFmpeg source with stderr piped so we can consume real diagnostics
-                ffmpeg_source = FFmpegPCMAudio(
-                    entry.filename,
-                    before_options=boptions,
-                    options=aoptions,
-                    stderr=subprocess.PIPE,
-                )
-
-                self._source = SourcePlaybackCounter(
-                    PCMVolumeTransformer(
-                        ffmpeg_source,
-                        self.volume,
-                    ),
-                    start_time=entry.start_time,
-                    playback_speed=entry.playback_speed,
-                )
-                log.voicedebug(  # type: ignore[attr-defined]
-                    "Playing %r using %r", self._source, self.voice_client
-                )
-                self.voice_client.play(self._source, after=self._playback_finished)
+                    self._source = SourcePlaybackCounter(
+                        PCMVolumeTransformer(
+                            ffmpeg_source,
+                            self.volume,
+                        ),
+                        start_time=entry.start_time,
+                        playback_speed=entry.playback_speed,
+                    )
+                    log.voicedebug(  # type: ignore[attr-defined]
+                        "Playing %r using %r", self._source, self.voice_client
+                    )
+                    self.voice_client.play(self._source, after=self._playback_finished)
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    log.exception(
+                        "Failed to start FFmpeg playback for entry:  %s",
+                        entry.title,
+                    )
+                    self._source = None
+                    self._current_player = None
+                    self._current_entry = None
+                    self.state = MusicPlayerState.STOPPED
+                    self.emit(
+                        "error",
+                        player=self,
+                        entry=entry,
+                        ex=FFmpegError(str(exc)),
+                    )
+                    self.loop.call_soon(self.play, True)
+                    return
 
                 self._current_player = self.voice_client
 
-                # I need to add ytdl hooks
                 self.state = MusicPlayerState.PLAYING
                 self._current_entry = entry
 
                 self._stderr_future = asyncio.Future()
 
-                # Obtain the actual stderr pipe from the ffmpeg process
                 try:
                     stderr_pipe = ffmpeg_source._process.stderr  # type: ignore[attr-defined]
                 except Exception:
@@ -448,7 +462,6 @@ class MusicPlayer(EventEmitter, Serializable):
 
                     stderr_thread.start()
                 else:
-                    # If we cannot attach to stderr, resolve the future successfully to avoid blocking error path
                     if isinstance(self._stderr_future, asyncio.Future):
                         self._stderr_future.set_result(True)
 

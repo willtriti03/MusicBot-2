@@ -296,6 +296,49 @@ class AudioFileCache:
 
         return success
 
+    def cleanup_startup_cache(self) -> bool:
+        """
+        Remove obviously invalid cache artifacts and then enforce configured limits.
+        This intentionally avoids deleting the entire cache on startup.
+        """
+        changed = False
+        valid_stems = set()
+
+        if self.cache_path.is_dir():
+            for cache_file in list(self.cache_path.iterdir()):
+                if not cache_file.is_file():
+                    continue
+
+                stem = cache_file.stem
+                name = cache_file.name.lower()
+                should_remove = (
+                    cache_file.stat().st_size <= 0
+                    or name.endswith((".part", ".tmp", ".temp", ".ytdl"))
+                    or ".part-" in name
+                )
+
+                if should_remove:
+                    changed = self._delete_cache_file(cache_file) or changed
+                    continue
+
+                valid_stems.add(stem)
+
+        if self.cachemap_file.is_file():
+            stale_keys = [
+                key
+                for key, value in self.auto_playlist_cachemap.items()
+                if value not in valid_stems
+            ]
+            if stale_keys:
+                changed = True
+                for key in stale_keys:
+                    self.auto_playlist_cachemap.pop(key, None)
+                self.save_autoplay_cachemap()
+
+        self.scan_audio_cache()
+        self.delete_old_audiocache()
+        return changed
+
     def handle_new_cache_entry(self, entry: "URLPlaylistEntry") -> None:
         """
         Test given entry for cachemap inclusion and run cache limit checks.

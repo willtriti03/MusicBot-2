@@ -15,6 +15,7 @@ from yt_dlp.utils import (  # type: ignore[import-untyped]
 from .constructs import Serializable
 from .downloader import YtdlpResponseDict
 from .exceptions import ExtractionError, InvalidDataError, MusicbotException
+from .playback import PlaybackMode
 from .spotify import Spotify
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ class BasePlaylistEntry(Serializable):
         self._is_downloading: bool = False
         self._is_downloaded: bool = False
         self._waiting_futures: List[AsyncFuture] = []
+        self._playback_mode: PlaybackMode = PlaybackMode.DOWNLOAD
 
     @property
     def start_time(self) -> float:
@@ -102,6 +104,16 @@ class BasePlaylistEntry(Serializable):
     def is_downloading(self) -> bool:
         """Get the entry's downloading status. Usually False."""
         return self._is_downloading
+
+    @property
+    def playback_mode(self) -> PlaybackMode:
+        return self._playback_mode
+
+    @playback_mode.setter
+    def playback_mode(self, value: Union[PlaybackMode, str]) -> None:
+        self._playback_mode = (
+            value if isinstance(value, PlaybackMode) else PlaybackMode(str(value))
+        )
 
     async def _download(self) -> None:
         """
@@ -181,7 +193,7 @@ async def run_command(command: List[str]) -> bytes:
 
 
 class URLPlaylistEntry(BasePlaylistEntry):
-    SERIAL_VERSION: int = 3  # version for serial data checks.
+    SERIAL_VERSION: int = 4  # version for serial data checks.
 
     def __init__(
         self,
@@ -218,6 +230,7 @@ class URLPlaylistEntry(BasePlaylistEntry):
         self.channel: Optional[GuildMessageableChannels] = channel
 
         self._aopt_eq: str = ""
+        self.playback_mode = PlaybackMode.DOWNLOAD
 
     @property
     def aoptions(self) -> str:
@@ -307,10 +320,13 @@ class URLPlaylistEntry(BasePlaylistEntry):
             {
                 "version": URLPlaylistEntry.SERIAL_VERSION,
                 "info": self.info.data,
+                "playback_mode": self.playback_mode.value,
                 "downloaded": self.is_downloaded,
                 "filename": self.filename,
                 "author_id": self.author.id if self.author else None,
                 "channel_id": self.channel.id if self.channel else None,
+                "start_time": self._start_time,
+                "playback_speed": self._playback_rate,
                 "aoptions": self.aoptions,
             }
         )
@@ -334,16 +350,14 @@ class URLPlaylistEntry(BasePlaylistEntry):
         if not vernum:
             log.error("Entry data is missing version number, cannot deserialize.")
             return None
-        if vernum != URLPlaylistEntry.SERIAL_VERSION:
+        if vernum not in (3, URLPlaylistEntry.SERIAL_VERSION):
             log.error("Entry data has the wrong version number, cannot deserialize.")
             return None
 
         try:
             info = YtdlpResponseDict(raw_json["info"])
-            downloaded = (
-                raw_json["downloaded"] if playlist.bot.config.save_videos else False
-            )
-            filename = raw_json["filename"] if downloaded else None
+            downloaded = bool(raw_json.get("downloaded", False))
+            filename = raw_json.get("filename", None)
 
             channel_id = raw_json.get("channel_id", None)
             if channel_id:
@@ -401,7 +415,20 @@ class URLPlaylistEntry(BasePlaylistEntry):
                 author = None
 
             entry = cls(playlist, info, author=author, channel=channel)
-            entry.filename = filename
+            entry.filename = filename or ""
+            entry._is_downloaded = downloaded and bool(filename)
+            entry.playback_mode = raw_json.get(
+                "playback_mode",
+                PlaybackMode.DOWNLOAD.value,
+            )
+
+            start_time = raw_json.get("start_time", None)
+            if start_time is not None:
+                entry.set_start_time(float(start_time))
+
+            playback_speed = raw_json.get("playback_speed", None)
+            if playback_speed is not None:
+                entry.set_playback_speed(float(playback_speed))
 
             return entry
         except (ValueError, TypeError, KeyError) as e:
@@ -673,17 +700,6 @@ class URLPlaylistEntry(BasePlaylistEntry):
         Actually download the media in this entry into cache.
         """
         log.info("Download started:  %s", self.url)
-        notify_channel = self.channel
-        if isinstance(notify_channel, discord.abc.Messageable):
-            try:
-                song_name = self.title or self.url
-                await self.playlist.bot.safe_send_message(
-                    notify_channel,
-                    f"Downloading **{song_name}**...",
-                    expire_in=30 if self.playlist.bot.config.delete_messages else 0,
-                )
-            except Exception:  # pylint: disable=broad-exception-caught
-                log.debug("Failed to send download notification for %s", self.url, exc_info=True)
 
         retry = 2
         info = None
@@ -731,7 +747,7 @@ class URLPlaylistEntry(BasePlaylistEntry):
 
 
 class StreamPlaylistEntry(BasePlaylistEntry):
-    SERIAL_VERSION: int = 3
+    SERIAL_VERSION: int = 4
 
     def __init__(
         self,
@@ -759,6 +775,7 @@ class StreamPlaylistEntry(BasePlaylistEntry):
         self.channel: Optional[GuildMessageableChannels] = channel
 
         self.filename: str = self.url
+        self.playback_mode = PlaybackMode.STREAM
 
     @property
     def from_auto_playlist(self) -> bool:
@@ -827,9 +844,13 @@ class StreamPlaylistEntry(BasePlaylistEntry):
             {
                 "version": StreamPlaylistEntry.SERIAL_VERSION,
                 "info": self.info.data,
+                "playback_mode": self.playback_mode.value,
+                "downloaded": True,
                 "filename": self.filename,
                 "author_id": self.author.id if self.author else None,
                 "channel_id": self.channel.id if self.channel else None,
+                "start_time": self._start_time,
+                "playback_speed": self._playback_rate,
             }
         )
 
@@ -846,7 +867,7 @@ class StreamPlaylistEntry(BasePlaylistEntry):
         if not vernum:
             log.error("Entry data is missing version number, cannot deserialize.")
             return None
-        if vernum != URLPlaylistEntry.SERIAL_VERSION:
+        if vernum not in (3, StreamPlaylistEntry.SERIAL_VERSION):
             log.error("Entry data has the wrong version number, cannot deserialize.")
             return None
 
@@ -910,7 +931,20 @@ class StreamPlaylistEntry(BasePlaylistEntry):
                 author = None
 
             entry = cls(playlist, info, author=author, channel=channel)
-            entry.filename = filename
+            entry.filename = filename or ""
+            entry._is_downloaded = True
+            entry.playback_mode = raw_json.get(
+                "playback_mode",
+                PlaybackMode.STREAM.value,
+            )
+
+            start_time = raw_json.get("start_time", None)
+            if start_time is not None:
+                entry.set_start_time(float(start_time))
+
+            playback_speed = raw_json.get("playback_speed", None)
+            if playback_speed is not None:
+                entry.set_playback_speed(float(playback_speed))
             return entry
         except (ValueError, KeyError, TypeError) as e:
             log.error("Could not load %s", cls.__name__, exc_info=e)
@@ -925,7 +959,7 @@ class StreamPlaylistEntry(BasePlaylistEntry):
 
 
 class LocalFilePlaylistEntry(BasePlaylistEntry):
-    SERIAL_VERSION: int = 1
+    SERIAL_VERSION: int = 2
 
     def __init__(
         self,
@@ -955,6 +989,7 @@ class LocalFilePlaylistEntry(BasePlaylistEntry):
         self.channel: Optional[GuildMessageableChannels] = channel
 
         self._aopt_eq: str = ""
+        self.playback_mode = PlaybackMode.LOCAL
 
     @property
     def aoptions(self) -> str:
@@ -1044,9 +1079,13 @@ class LocalFilePlaylistEntry(BasePlaylistEntry):
             {
                 "version": LocalFilePlaylistEntry.SERIAL_VERSION,
                 "info": self.info.data,
+                "playback_mode": self.playback_mode.value,
+                "downloaded": self.is_downloaded,
                 "filename": self.filename,
                 "author_id": self.author.id if self.author else None,
                 "channel_id": self.channel.id if self.channel else None,
+                "start_time": self._start_time,
+                "playback_speed": self._playback_rate,
                 "aoptions": self.aoptions,
             }
         )
@@ -1070,16 +1109,14 @@ class LocalFilePlaylistEntry(BasePlaylistEntry):
         if not vernum:
             log.error("Entry data is missing version number, cannot deserialize.")
             return None
-        if vernum != LocalFilePlaylistEntry.SERIAL_VERSION:
+        if vernum not in (1, LocalFilePlaylistEntry.SERIAL_VERSION):
             log.error("Entry data has the wrong version number, cannot deserialize.")
             return None
 
         try:
             info = YtdlpResponseDict(raw_json["info"])
-            downloaded = (
-                raw_json["downloaded"] if playlist.bot.config.save_videos else False
-            )
-            filename = raw_json["filename"] if downloaded else None
+            downloaded = bool(raw_json.get("downloaded", True))
+            filename = raw_json.get("filename", None)
 
             channel_id = raw_json.get("channel_id", None)
             if channel_id:
@@ -1137,7 +1174,20 @@ class LocalFilePlaylistEntry(BasePlaylistEntry):
                 author = None
 
             entry = cls(playlist, info, author=author, channel=channel)
-            entry.filename = filename
+            entry.filename = filename or ""
+            entry._is_downloaded = downloaded and bool(filename)
+            entry.playback_mode = raw_json.get(
+                "playback_mode",
+                PlaybackMode.LOCAL.value,
+            )
+
+            start_time = raw_json.get("start_time", None)
+            if start_time is not None:
+                entry.set_start_time(float(start_time))
+
+            playback_speed = raw_json.get("playback_speed", None)
+            if playback_speed is not None:
+                entry.set_playback_speed(float(playback_speed))
 
             return entry
         except (ValueError, TypeError, KeyError) as e:
