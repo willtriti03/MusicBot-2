@@ -29,7 +29,11 @@ from discord.ext import commands
 from . import downloader, exceptions
 from .aliases import Aliases, AliasesDefault
 from .autoplaylist import AutoPlaylistManager
+from .cache_index import CacheIndex
+from .command_service import CommandService
 from .config import Config, ConfigDefaults
+from .guild_state import GuildStateStore
+from .media import DownloadManager, MediaResolver
 from .voice_commands import VoiceCommandParser, load_bot_name_from_env
 from .voice_recognition import VoiceRecognitionHandler, VoiceListener
 from .constants import (
@@ -59,10 +63,14 @@ from .entry import LocalFilePlaylistEntry, StreamPlaylistEntry, URLPlaylistEntry
 from .filecache import AudioFileCache
 from .json import Json
 from .opus_loader import load_opus_lib
-from .playback import GuildPlaybackSession
+from .playback import GuildPlaybackSession, GuildSession
+from .playback_coordinator import PlaybackCoordinator
+from .policies import QueueEmptyPolicyService
 from .permissions import PermissionGroup, Permissions, PermissionsDefaults
 from .player import MusicPlayer
 from .playlist import Playlist
+from .queue_store import QueueStore
+from .runtime import format_runtime_diagnostics
 from .spotify import Spotify
 from .utils import (
     _func_,
@@ -77,6 +85,7 @@ from .utils import (
     owner_only,
     slugify,
 )
+from .voice_connection import VoiceConnectionService
 
 # optional imports
 try:
@@ -156,7 +165,7 @@ class MusicBot(commands.Bot):
         self.cached_app_info: Optional[discord.AppInfo] = None
         self.last_status: Optional[discord.BaseActivity] = None
         self.players: Dict[int, MusicPlayer] = {}
-        self.playback_sessions: Dict[int, GuildPlaybackSession] = {}
+        self.playback_sessions: Dict[int, GuildSession] = {}
         self._slash_commands_registered: bool = False
         self._slash_sync_task: Optional[asyncio.Task[Any]] = None
 
@@ -185,9 +194,12 @@ class MusicBot(commands.Bot):
 
         log.info("Initializing audio cache manager...")
         self.filecache = AudioFileCache(self)
+        self.cache_index = CacheIndex(self.filecache)
 
         log.info("Initializing downloader...")
         self.downloader = downloader.Downloader(self)
+        self.download_manager = DownloadManager(self.downloader)
+        self.media_resolver = MediaResolver(self.download_manager)
 
         # Factory function for server-specific data
         def server_factory() -> GuildSpecificData:
@@ -195,6 +207,24 @@ class MusicBot(commands.Bot):
 
         # Defaultdict for GuildSpecificData
         self.server_data: DefaultDict[int, GuildSpecificData] = defaultdict(server_factory)
+        self.guild_state_store = GuildStateStore(self)
+        self.queue_store = QueueStore(self)
+        self.voice_connection_service = VoiceConnectionService(self)
+        self.playback_coordinator = PlaybackCoordinator(
+            self,
+            self.voice_connection_service,
+            self.media_resolver,
+        )
+        self.command_service = CommandService(
+            self,
+            self.playback_coordinator,
+            self.media_resolver,
+        )
+        self.queue_empty_policy = QueueEmptyPolicyService(
+            self,
+            self.download_manager,
+            self.playback_coordinator,
+        )
 
         # Spotify and session setup
         self.spotify: Optional[Spotify] = None
@@ -212,6 +242,7 @@ class MusicBot(commands.Bot):
 
         log.info("Registering slash commands...")
         self._register_slash_commands()
+        log.info("Locked runtime target:\n%s", format_runtime_diagnostics())
         log.info("MusicBot core initialization completed.")
 
 
@@ -687,9 +718,9 @@ class MusicBot(commands.Bot):
             self.cached_app_info.id, permissions=permissions, guild=guild
         )
 
-    def get_playback_session(self, guild: discord.Guild) -> GuildPlaybackSession:
+    def get_playback_session(self, guild: discord.Guild) -> GuildSession:
         if guild.id not in self.playback_sessions:
-            self.playback_sessions[guild.id] = GuildPlaybackSession(self, guild.id)
+            self.playback_sessions[guild.id] = GuildSession(self, guild.id)
         return self.playback_sessions[guild.id]
 
     def _collect_guild_voice_clients(self, guild: discord.Guild) -> List[Any]:
@@ -712,8 +743,7 @@ class MusicBot(commands.Bot):
         return known_voice_clients
 
     async def get_voice_client(self, channel: VoiceableChannel) -> discord.VoiceClient:
-        session = self.get_playback_session(channel.guild)
-        return await session.ensure_connected(
+        return await self.voice_connection_service.ensure_connected(
             channel,
             reason="voice client requested",
         )
@@ -971,8 +1001,9 @@ class MusicBot(commands.Bot):
         return client
 
     async def disconnect_voice_client(self, guild: discord.Guild) -> None:
-        await self.get_playback_session(guild).teardown(
+        await self.voice_connection_service.disconnect(
             reason="disconnect_voice_client",
+            guild=guild,
             force=True,
         )
 
@@ -1137,8 +1168,7 @@ class MusicBot(commands.Bot):
         *,
         deserialize: bool = False,
     ) -> MusicPlayer:
-        session = self.get_playback_session(channel.guild)
-        return await session.ensure_player(
+        return await self.voice_connection_service.ensure_player(
             channel,
             create=create,
             deserialize=deserialize,
@@ -1550,413 +1580,7 @@ class MusicBot(commands.Bot):
         if player.is_dead:
             return
 
-        if not player.playlist.entries and not player.current_entry:
-            log.info("Queue is empty. Autoplay features are disabled; playback stopped.")
-            if self.config.leave_after_queue_empty:
-                log.info("Player finished and queue is empty, leaving voice channel...")
-                await self.disconnect_voice_client(guild)
-            return
-
-        if player.playlist.entries and (not player.current_entry or player.is_stopped):
-            log.info(
-                "Player idle or stopped, starting playback - queue has %d entries",
-                len(player.playlist.entries),
-            )
-            if player.is_stopped:
-                player.play()
-            else:
-                player.play(_continue=True)
-            return
-
-        # manage auto playlist playback.
-        if (
-            not player.playlist.entries
-            and not player.current_entry
-            and self.config.auto_playlist
-        ):
-            # NOTE:  self.server_data[].autoplaylist will only contain links loaded from the file.
-            #  while player.autoplaylist may contain links expanded from playlists.
-            #  the only issue is that links from a playlist might fail and fire
-            #  remove event, but no link will be removed since none will match.
-            if not player.autoplaylist:
-                if not self.server_data[guild.id].autoplaylist:
-                    log.warning(
-                        "No playable songs in the Guild autoplaylist, disabling."
-                    )
-                    self.config.auto_playlist = False
-                else:
-                    log.debug(
-                        "No content in current autoplaylist. Filling with new music..."
-                    )
-                    player.autoplaylist = list(
-                        self.server_data[player.voice_client.guild.id].autoplaylist
-                    )
-
-            while player.autoplaylist:
-                if self.config.auto_playlist_random:
-                    random.shuffle(player.autoplaylist)
-                    song_url = random.choice(player.autoplaylist)
-                else:
-                    song_url = player.autoplaylist[0]
-                player.autoplaylist.remove(song_url)
-
-                # Check if song is blocked.
-                if (
-                    self.config.song_blocklist_enabled
-                    and self.config.song_blocklist.is_blocked(song_url)
-                ):
-                    if self.config.auto_playlist_remove_on_block:
-                        await self.server_data[guild.id].autoplaylist.remove_track(
-                            song_url,
-                            ex=UserWarning("Found in song block list."),
-                            delete_from_ap=True,
-                        )
-                    continue
-
-                try:
-                    info = await self.downloader.extract_info(
-                        song_url, download=False, process=True
-                    )
-
-                except youtube_dl.utils.DownloadError as e:
-                    log.error(
-                        'Error while downloading song "%s":  %s',
-                        song_url,
-                        e,
-                    )
-
-                    await self.server_data[guild.id].autoplaylist.remove_track(
-                        song_url, ex=e, delete_from_ap=self.config.remove_ap
-                    )
-                    continue
-
-                except (
-                    exceptions.ExtractionError,
-                    youtube_dl.utils.YoutubeDLError,
-                ) as e:
-                    log.error(
-                        'Error extracting song "%s": %s',
-                        song_url,
-                        e,
-                        exc_info=True,
-                    )
-
-                    await self.server_data[guild.id].autoplaylist.remove_track(
-                        song_url, ex=e, delete_from_ap=self.config.remove_ap
-                    )
-                    continue
-
-                except exceptions.MusicbotException:
-                    log.exception(
-                        "MusicBot needs to stop the autoplaylist extraction and bail."
-                    )
-                    return
-                except Exception:  # pylint: disable=broad-exception-caught
-                    log.exception(
-                        "MusicBot got an unhandled exception in player finished event."
-                    )
-                    break
-
-                if info.has_entries:
-                    log.info(
-                        "Expanding auto playlist with entries extracted from:  %s",
-                        info.url,
-                    )
-                    entries = info.get_entries_objects()
-                    pl_urls: List[str] = []
-                    for entry in entries:
-                        pl_urls.append(entry.url)
-
-                    player.autoplaylist = pl_urls + player.autoplaylist
-                    continue
-
-                try:
-                    await player.playlist.add_entry_from_info(
-                        info,
-                        channel=None,
-                        author=None,
-                        head=False,
-                    )
-                except (
-                    exceptions.ExtractionError,
-                    exceptions.WrongEntryTypeError,
-                ) as e:
-                    log.error(
-                        "Error adding song from autoplaylist: %s",
-                        str(e),
-                    )
-                    log.debug("Exception data for above error:", exc_info=True)
-                    continue
-                break
-
-            if not self.server_data[guild.id].autoplaylist:
-                log.warning("No playable songs in the autoplaylist, disabling.")
-                self.config.auto_playlist = False
-
-        # 유사 음악 자동 추가 기능
-        elif (
-            not player.playlist.entries
-            and not player.current_entry
-            and entry
-            and entry.url
-        ):
-            server_state = self.server_data[guild.id]
-
-            # 서버별 자동 유사곡 설정 체크
-            if not server_state.auto_similar_enabled:
-                log.info(
-                    "Auto-similar is DISABLED for guild '%s' (ID: %s). Not adding similar songs.",
-                    guild.name,
-                    guild.id,
-                )
-                pass  # 아무것도 하지 않고 다음으로 진행 (serialize_queue로)
-            elif not self.config.auto_similar:
-                log.debug(
-                    "Auto-similar is disabled in global config. Not adding similar songs."
-                )
-                pass  # 아무것도 하지 않고 다음으로 진행
-            else:
-                log.warning(
-                    "Auto-similar is ENABLED for guild '%s' (ID: %s). Adding similar songs...",
-                    guild.name,
-                    guild.id,
-                )
-
-                # YouTube 동영상 ID 추출
-                video_id = None
-                if "youtube.com/watch?v=" in entry.url:
-                    video_id = entry.url.split("watch?v=")[1].split("&")[0]
-                elif "youtu.be/" in entry.url:
-                    video_id = entry.url.split("youtu.be/")[1].split("?")[0]
-
-                if video_id:
-                    # YouTube Mix 플레이리스트 URL 생성
-                    mix_url = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"
-                    log.info("Fetching similar songs from YouTube Mix: %s", mix_url)
-
-                    try:
-                        # Mix 플레이리스트에서 곡 추출
-                        info = await self.downloader.extract_info(
-                            mix_url, download=False, process=True
-                        )
-
-                        if info.has_entries:
-                            entries = info.get_entries_objects()
-
-                            # 재생한 곡의 언어 감지
-                            def detect_language(text: str) -> str:
-                                """Detect language from text (Korean, Japanese, Chinese, or Other)"""
-                                import re
-                                has_korean = bool(re.search(r'[가-힣]', text))
-                                has_japanese = bool(re.search(r'[ぁ-んァ-ン]', text))
-                                has_chinese = bool(re.search(r'[\u4e00-\u9fff]', text))
-
-                                if has_korean:
-                                    return 'korean'
-                                elif has_japanese:
-                                    return 'japanese'
-                                elif has_chinese:
-                                    return 'chinese'
-                                else:
-                                    return 'other'
-
-                            original_language = detect_language(entry.title or "")
-                            log.info(
-                                "Detected language '%s' from track: %s",
-                                original_language,
-                                entry.title,
-                            )
-
-                            # 중복 방지를 위한 추적 시스템
-                            seen_url_keys: Set[str] = set()
-                            seen_video_ids: Set[str] = set()
-
-                            def register_url(url: Optional[str]) -> None:
-                                if isinstance(url, str) and url:
-                                    seen_url_keys.add(url.lower())
-
-                            def register_info(info_obj: Optional["downloader.YtdlpResponseDict"]) -> None:
-                                if not info_obj:
-                                    return
-                                register_url(info_obj.url)
-                                register_url(info_obj.webpage_url)
-                                register_url(info_obj.original_url)
-                                vid = info_obj.video_id
-                                if vid:
-                                    seen_video_ids.add(vid.lower())
-
-                            # 방금 재생한 곡 등록
-                            register_url(entry.url)
-                            register_info(getattr(entry, "info", None))
-
-                            # 현재 큐에 있는 모든 곡 등록
-                            for queued_entry in player.playlist.entries:
-                                register_url(getattr(queued_entry, "url", None))
-                                register_info(getattr(queued_entry, "info", None))
-
-                            # 현재 재생 중인 곡 등록
-                            if player.current_entry:
-                                register_url(getattr(player.current_entry, "url", None))
-                                register_info(getattr(player.current_entry, "info", None))
-
-                            # 서버 히스토리에서 최근 재생한 곡들 등록
-                            register_url(server_state.last_played_song_subject)
-                            register_url(server_state.current_playing_url)
-                            for hist_item in server_state.auto_similar_history:
-                                register_url(hist_item)
-
-                            # 언어별로 곡 분류 (같은 언어 우선, 하지만 유연하게)
-                            same_language_entries = []
-                            other_language_entries = []
-
-                            for similar_entry in entries:
-                                candidate_language = detect_language(similar_entry.title or "")
-
-                                # 원본이 한글/일본어/중국어 제목이면 같은 언어 우선
-                                # 하지만 영어 제목의 한국/일본 가수도 포함되도록 유연하게 처리
-                                if original_language in ['korean', 'japanese', 'chinese']:
-                                    # 같은 언어는 우선 추가
-                                    if candidate_language == original_language:
-                                        same_language_entries.append(similar_entry)
-                                    # 영어/기타는 후순위 (완전히 제외하지 않음)
-                                    else:
-                                        other_language_entries.append(similar_entry)
-                                else:
-                                    # 원본이 영어/기타면 모든 곡 동등하게 취급
-                                    same_language_entries.append(similar_entry)
-
-                            # 같은 언어 곡 우선, 부족하면 다른 언어도 추가
-                            random.shuffle(same_language_entries)
-                            random.shuffle(other_language_entries)
-
-                            # 같은 언어가 충분하면 (7곡 이상) 다른 언어는 3곡만 추가
-                            # 부족하면 다른 언어로 채움
-                            if len(same_language_entries) >= 7:
-                                prioritized_entries = same_language_entries + other_language_entries[:3]
-                            else:
-                                prioritized_entries = same_language_entries + other_language_entries
-
-                            log.info(
-                                "Language preference: %d primary tracks, %d secondary tracks (detected: %s)",
-                                len(same_language_entries),
-                                len(other_language_entries),
-                                original_language,
-                            )
-
-                            added_count = 0
-                            max_similar_songs = 10  # 최대 10곡까지 추가
-
-                            for similar_entry in prioritized_entries:
-                                if added_count >= max_similar_songs:
-                                    break
-
-                                # 후보곡의 정보 추출
-                                candidate_url = similar_entry.get_playable_url()
-                                candidate_video_id = (
-                                    similar_entry.video_id.lower()
-                                    if similar_entry.video_id
-                                    else ""
-                                )
-
-                                candidate_urls = {
-                                    candidate_url,
-                                    similar_entry.url,
-                                    similar_entry.webpage_url,
-                                    similar_entry.original_url,
-                                }
-
-                                # video_id로 중복 체크
-                                if candidate_video_id and candidate_video_id in seen_video_ids:
-                                    log.debug("Skipping duplicate video_id: %s", candidate_video_id)
-                                    continue
-
-                                # URL로 중복 체크
-                                if any(
-                                    isinstance(url, str) and url and url.lower() in seen_url_keys
-                                    for url in candidate_urls
-                                ):
-                                    log.debug("Skipping duplicate URL: %s", candidate_url)
-                                    continue
-
-                                try:
-                                    # autosimilar 항목임을 표시하기 위한 플래그 추가
-                                    if not hasattr(similar_entry, 'data'):
-                                        similar_entry.data = {}
-                                    similar_entry.data['__from_autosimilar'] = True
-                                    
-                                    await player.playlist.add_entry_from_info(
-                                        similar_entry,
-                                        channel=None,
-                                        author=None,
-                                        head=False,
-                                    )
-
-                                    # 추가된 곡을 히스토리에 기록
-                                    history_key = (
-                                        candidate_video_id
-                                        or candidate_url
-                                        or similar_entry.title
-                                        or ""
-                                    )
-                                    if history_key:
-                                        server_state.auto_similar_history.append(history_key)
-
-                                    # 다음 반복을 위해 추가된 곡 등록
-                                    if candidate_video_id:
-                                        seen_video_ids.add(candidate_video_id)
-                                    for url in candidate_urls:
-                                        if isinstance(url, str) and url:
-                                            seen_url_keys.add(url.lower())
-
-                                    added_count += 1
-                                    log.debug("Added similar song: %s", similar_entry.title)
-
-                                except Exception as e:
-                                    log.warning("Failed to add similar song: %s", e)
-                                    continue
-
-                            log.info("Added %d similar songs to the queue", added_count)
-                        else:
-                            log.warning("YouTube Mix returned no entries")
-
-                    except Exception as e:
-                        log.error("Error fetching similar songs from YouTube Mix: %s", e)
-                        log.debug("Exception details:", exc_info=True)
-                else:
-                    log.debug("Could not extract video ID from URL: %s", entry.url)
-
-        else:
-            # auto_playlist와 auto_similar이 모두 비활성화되어 있음
-            log.debug(
-                "Auto-playlist and auto-similar are both disabled. Queue management only."
-            )
-            await self.serialize_queue(guild)
-
-        if player.is_dead:
-            return
-
-        # 큐가 비어있는지 확인
-        if not player.playlist.entries and not player.current_entry:
-            server_state = self.server_data[guild.id]
-            if not self.config.auto_playlist and not server_state.auto_similar_enabled:
-                log.info(
-                    "Queue is empty and auto-play features are disabled. Playback stopped."
-                )
-            else:
-                log.debug(
-                    "Queue is empty after auto-play attempt. No more songs to play."
-                )
-            return
-
-        # 큐에 곡이 있으면 재생 시작
-        if player.playlist.entries:
-            if not player.current_entry or player.is_stopped:
-                # 현재 재생 중인 곡이 없거나 정지 상태면 시작
-                log.info("Player idle or stopped, starting playback - queue has %d entries", len(player.playlist.entries))
-                if player.is_stopped:
-                    player.play()
-                else:
-                    player.play(_continue=True)
+        await self.queue_empty_policy.handle(player, entry)
 
     async def on_player_entry_added(
         self,
@@ -2146,20 +1770,7 @@ class MusicBot(commands.Bot):
         """
         Serialize the current queue for a server's player to json.
         """
-        if not self.config.persistent_queue:
-            return
-
-        player = self.get_player_in(guild)
-        if not player:
-            return
-
-        path = self.config.data_path.joinpath(str(guild.id), DATA_GUILD_FILE_QUEUE)
-
-        async with self.aiolocks["queue_serialization" + ":" + str(guild.id)]:
-            log.debug("Serializing queue for %s", guild.id)
-
-            with open(path, "w", encoding="utf8") as f:
-                f.write(player.serialize(sort_keys=True))
+        await self.queue_store.save(guild, self.get_player_in(guild))
 
     async def deserialize_queue(
         self,
@@ -2170,24 +1781,7 @@ class MusicBot(commands.Bot):
         """
         Deserialize a saved queue for a server into a MusicPlayer.  If no queue is saved, returns None.
         """
-        if not self.config.persistent_queue:
-            return None
-
-        if playlist is None:
-            playlist = Playlist(self)
-
-        path = self.config.data_path.joinpath(str(guild.id), DATA_GUILD_FILE_QUEUE)
-
-        async with self.aiolocks["queue_serialization:" + str(guild.id)]:
-            if not path.is_file():
-                return None
-
-            log.debug("Deserializing queue for %s", guild.id)
-
-            with open(path, "r", encoding="utf8") as f:
-                data = f.read()
-
-        return MusicPlayer.from_json(data, self, voice_client, playlist)
+        return await self.queue_store.load(guild, voice_client, playlist)
 
     async def write_current_song(self, guild: discord.Guild, entry: EntryTypes) -> None:
         """
@@ -2866,15 +2460,16 @@ class MusicBot(commands.Bot):
         log.debug("Ensuring data folders exist")
         for guild in self.guilds:
             self.config.data_path.joinpath(str(guild.id)).mkdir(exist_ok=True)
+            await self.guild_state_store.load(self.server_data[guild.id])
 
         names_path = self.config.data_path.joinpath(DATA_FILE_SERVERS)
         with open(names_path, "w", encoding="utf8") as f:
             for guild in sorted(self.guilds, key=lambda s: int(s.id)):
                 f.write(f"{guild.id}: {guild.name}\n")
 
-        if self.filecache.has_cache_data():
+        if self.cache_index.has_cache_data():
             log.info("Running conditional audio cache cleanup on startup.")
-        self.filecache.cleanup_startup_cache()
+        self.cache_index.cleanup_startup()
 
     async def _on_ready_validate_configs(self) -> None:
         """
@@ -3192,6 +2787,37 @@ class MusicBot(commands.Bot):
                     lambda: self._slash_cmd_stoplisten(ctx),
                 )
 
+            @slash_command(
+                name="autoplaylist",
+                description="Manage the guild autoplaylist.",
+                guild_only=True,
+            )
+            async def slash_autoplaylist(
+                ctx: ApplicationContext,
+                option: str = "",
+                value: str = "",
+            ) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "autoplaylist",
+                    lambda: self._slash_cmd_autoplaylist(ctx, option, value),
+                )
+
+            @slash_command(
+                name="autosimilar",
+                description="Show or change auto-similar playback for this guild.",
+                guild_only=True,
+            )
+            async def slash_autosimilar(
+                ctx: ApplicationContext,
+                value: str = "",
+            ) -> None:
+                await self._run_slash_command(
+                    ctx,
+                    "autosimilar",
+                    lambda: self._slash_cmd_autosimilar(ctx, value),
+                )
+
         except Exception:
             log.exception("Slash command registration failed; continuing without slash commands.")
             return
@@ -3363,113 +2989,74 @@ class MusicBot(commands.Bot):
     async def _slash_cmd_play(
         self, ctx: ApplicationContext, query: str
     ) -> CommandResponse:
-        guild = self._get_slash_guild(ctx)
-        author = self._get_slash_author(ctx)
-        channel = self._get_slash_channel(ctx)
-
-        return await self.cmd_play(
-            None,
-            self.get_player_in(guild),
-            channel,
-            guild,
-            author,
-            self._get_slash_permissions(ctx),
-            [],
-            query,
-        )
+        return await self.command_service.execute_slash("play", ctx, query=query)
 
     async def _slash_cmd_stream(
         self, ctx: ApplicationContext, query: str
     ) -> CommandResponse:
-        guild = self._get_slash_guild(ctx)
-        author = self._get_slash_author(ctx)
-        channel = self._get_slash_channel(ctx)
-
-        return await self.cmd_stream(
-            self.get_player_in(guild),
-            channel,
-            guild,
-            author,
-            self._get_slash_permissions(ctx),
-            None,
-            query,
-        )
+        return await self.command_service.execute_slash("stream", ctx, query=query)
 
     async def _slash_cmd_summon(self, ctx: ApplicationContext) -> CommandResponse:
-        return await self.cmd_summon(
-            self._get_slash_guild(ctx),
-            self._get_slash_author(ctx),
-            None,
-        )
+        return await self.command_service.execute_slash("summon", ctx)
 
     async def _slash_cmd_skip(
         self, ctx: ApplicationContext, force: bool
     ) -> CommandResponse:
-        guild = self._get_slash_guild(ctx)
-        author = self._get_slash_author(ctx)
-        return await self.cmd_skip(
-            guild,
-            self._get_slash_player(ctx),
-            author,
-            ctx.interaction,  # used only as a unique vote token
-            self._get_slash_permissions(ctx),
-            self._get_slash_skip_voice_channel(guild),
-            "force" if force else "",
-        )
+        return await self.command_service.execute_slash("skip", ctx, force=force)
 
     async def _slash_cmd_pause(self, ctx: ApplicationContext) -> CommandResponse:
-        return await self.cmd_pause(self._get_slash_player(ctx))
+        return await self.command_service.execute_slash("pause", ctx)
 
     async def _slash_cmd_resume(self, ctx: ApplicationContext) -> CommandResponse:
-        return await self.cmd_resume(self._get_slash_player(ctx))
+        return await self.command_service.execute_slash("resume", ctx)
 
     async def _slash_cmd_queue(
         self, ctx: ApplicationContext, page: int
     ) -> CommandResponse:
-        guild = self._get_slash_guild(ctx)
-        return await self.cmd_queue(
-            guild,
-            self._get_slash_channel(ctx),
-            self._get_slash_player(ctx),
-            str(page),
-        )
+        return await self.command_service.execute_slash("queue", ctx, page=page)
 
     async def _slash_cmd_np(self, ctx: ApplicationContext) -> CommandResponse:
-        guild = self._get_slash_guild(ctx)
-        return await self.cmd_np(
-            self._get_slash_player(ctx),
-            self._get_slash_channel(ctx),
-            guild,
-        )
+        return await self.command_service.execute_slash("np", ctx)
 
     async def _slash_cmd_volume(
         self, ctx: ApplicationContext, level: str
     ) -> CommandResponse:
-        return await self.cmd_volume(self._get_slash_player(ctx), level)
+        return await self.command_service.execute_slash("volume", ctx, level=level)
 
     async def _slash_cmd_disconnect(self, ctx: ApplicationContext) -> CommandResponse:
-        return await self.cmd_disconnect(self._get_slash_guild(ctx))
+        return await self.command_service.execute_slash("disconnect", ctx)
 
     async def _slash_cmd_purgecache(self, ctx: ApplicationContext) -> CommandResponse:
-        author = self._get_slash_author(ctx)
-        if author.id != self.config.owner_id:
-            raise exceptions.PermissionsError(
-                "Only the owner can use this command.",
-                expire_in=30,
-            )
-        return await self.cmd_purgecache()
+        return await self.command_service.execute_slash("purgecache", ctx)
 
     async def _slash_cmd_listen(self, ctx: ApplicationContext) -> CommandResponse:
-        return await self.cmd_listen(
-            self._get_slash_guild(ctx),
-            self._get_slash_channel(ctx),
-            self._get_slash_author(ctx),
-        )
+        return await self.command_service.execute_slash("listen", ctx)
 
     async def _slash_cmd_stoplisten(self, ctx: ApplicationContext) -> CommandResponse:
-        return await self.cmd_stoplisten(
-            self._get_slash_guild(ctx),
-            self._get_slash_channel(ctx),
+        return await self.command_service.execute_slash("stoplisten", ctx)
+
+    async def _slash_cmd_autoplaylist(
+        self,
+        ctx: ApplicationContext,
+        option: str,
+        value: str = "",
+    ) -> CommandResponse:
+        return await self.command_service.execute_slash(
+            "autoplaylist",
+            ctx,
+            option=option,
+            value=value,
+        )
+
+    async def _slash_cmd_autosimilar(
+        self,
+        ctx: ApplicationContext,
+        value: str = "",
+    ) -> CommandResponse:
+        return await self.command_service.execute_slash(
+            "autosimilar",
+            ctx,
+            value=value,
         )
 
     async def _sync_registered_slash_commands(self) -> None:
@@ -4033,11 +3620,6 @@ class MusicBot(commands.Bot):
             {command_prefix}autoplaylist set [playlist.txt]
                 Set a playlist as default for this guild and reloads the guild auto playlist.
         """
-        return Response(
-            "Autoplaylist has been disabled in the stabilized playback pipeline.",
-            delete_after=30,
-        )
-
         option = option.lower()
         if option not in ["+", "-", "add", "remove", "show", "set"]:
             raise exceptions.CommandError(
@@ -6694,11 +6276,6 @@ class MusicBot(commands.Bot):
 
         If no value is provided, shows the current status.
         """
-        return Response(
-            "Auto-similar has been disabled in the stabilized playback pipeline.",
-            delete_after=30,
-        )
-
         server_state = self.server_data[guild.id]
 
         if not value:
@@ -6722,6 +6299,7 @@ class MusicBot(commands.Bot):
                     delete_after=20,
                 )
             server_state.auto_similar_enabled = True
+            await self.server_data[guild.id].save_guild_options_file()
             log.warning(
                 "[AUTO-SIMILAR] ENABLED in guild '%s' (ID: %s)",
                 guild.name,
@@ -6741,6 +6319,7 @@ class MusicBot(commands.Bot):
                     delete_after=20,
                 )
             server_state.auto_similar_enabled = False
+            await self.server_data[guild.id].save_guild_options_file()
             log.warning(
                 "[AUTO-SIMILAR] DISABLED in guild '%s' (ID: %s)",
                 guild.name,
@@ -6884,7 +6463,7 @@ class MusicBot(commands.Bot):
 
         # actually query the filesystem.
         if opt == "update":
-            self.filecache.scan_audio_cache()
+            self.cache_index.snapshot()
             # force output of info after we have updated it.
             opt = "info"
 
@@ -6901,7 +6480,9 @@ class MusicBot(commands.Bot):
             if not self.config.storage_limit_days:
                 time_limit = "Unlimited"
 
-            cached_bytes, cached_files = self.filecache.get_cache_size()
+            cache_snapshot = self.cache_index.snapshot()
+            cached_bytes = cache_snapshot["size_bytes"]
+            cached_files = cache_snapshot["file_count"]
             size_now = self.str.get(
                 "cmd-cache-size-now", "\n\n**Cached Now:**  {0} in {1} file(s)"
             ).format(
@@ -6920,7 +6501,7 @@ class MusicBot(commands.Bot):
         # clear cache according to settings.
         if opt == "clear":
             if self.filecache.cache_dir_exists():
-                if self.filecache.delete_old_audiocache():
+                if self.cache_index.enforce_limits():
                     return Response(
                         self.str.get(
                             "cmd-cache-clear-success",
@@ -6953,7 +6534,7 @@ class MusicBot(commands.Bot):
         """
         Force delete all cached downloads regardless of retention settings.
         """
-        if not self.filecache.has_cache_data():
+        if not self.cache_index.has_cache_data():
             return Response(
                 self.str.get(
                     "cmd-cache-purge-no-cache",
@@ -6992,7 +6573,7 @@ class MusicBot(commands.Bot):
                 entry.cache_busted = False
                 entry._is_downloaded = False
 
-        success = self.filecache.purge_audio_cache()
+        success = self.cache_index.purge()
 
         for guild in guilds_to_serialize:
             await self.serialize_queue(guild)
@@ -7800,7 +7381,7 @@ class MusicBot(commands.Bot):
         """
         del guild, prefix
         return Response(
-            "Command prefix is fixed to `/`. Use slash commands for Discord command completion.",
+            "Text commands are disabled. Use slash commands or voice commands.",
             delete_after=30,
         )
 
@@ -8351,30 +7932,32 @@ class MusicBot(commands.Bot):
         else:
             command_prefix = self.config.command_prefix
         message_content = message.content.strip()
-        
-        # Voice command detection - only check if message doesn't start with prefix
-        # 일반 prefix 명령어가 아닌 경우에만 음성 명령어 체크
-        if not message_content.startswith(command_prefix) and (
-            not self.config.commands_via_mention or not message_content.startswith(self_mention)
-        ):
-            if self.voice_parser.is_voice_command(message_content):
-                log.info(f"Detected voice command: {message_content}")
-                parsed = self.voice_parser.parse_command(message_content)
 
-                if parsed:
-                    command_name, args_str = parsed
-                    command_name = command_name.lstrip("!")
-                    # Convert voice command to standard bot command format
-                    # Create a new message content with the command prefix
-                    if args_str:
-                        new_content = f"{command_prefix}{command_name} {args_str}"
-                    else:
-                        new_content = f"{command_prefix}{command_name}"
+        if self.config.commands_via_mention and message_content.startswith(self_mention):
+            await self.safe_send_message(
+                message.channel,
+                "Text commands have been removed. Use slash commands or voice commands.",
+                expire_in=20,
+            )
+            return
 
-                    # Replace the message content and continue processing
-                    message.content = new_content
-                    message_content = new_content
-                    log.info(f"Converted voice command to: {new_content}")
+        if command_prefix and message_content.startswith(command_prefix):
+            command_name = message_content[len(command_prefix) :].split(" ", 1)[0].lower().strip()
+            handler = getattr(self, "cmd_" + command_name, None)
+            if not handler and self.config.usealias and hasattr(self, "aliases"):
+                alias_command = self.aliases.get(command_name)
+                if alias_command:
+                    handler = getattr(self, "cmd_" + alias_command, None)
+
+            if handler:
+                await self.safe_send_message(
+                    message.channel,
+                    "Text commands have been removed. Use slash commands or voice commands.",
+                    expire_in=20,
+                )
+                return
+
+        return
         # if the prefix is an emoji, silently remove the space often auto-inserted after it.
         # this regex will get us close enough to knowing if an unicode emoji is in the prefix...
         emoji_regex = re.compile(r"^(<a?:.+:\d+>|:.+:|[^ -~]+)$")

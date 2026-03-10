@@ -527,56 +527,9 @@ def opt_check_updates() -> None:
     """
     Runs a collection of git and pip commands and logs if updates are available.
     """
-    log.info("\nChecking for updates to MusicBot or dependencies...")
-    needs_update = False
-    if GIT.works():
-        git_branch = GIT.show_branch()
-        commit_at, commit_to = GIT.check_updates()
-        if commit_at and commit_to:
-            log.warning(
-                "MusicBot updates are available through `git` command.\n"
-                "Your current branch is:  %s\n"
-                "The latest commit ID is:  %s",
-                git_branch,
-                commit_to,
-            )
-            needs_update = True
-        else:
-            log.info("No MusicBot updates available via `git` command.")
-    else:
-        log.warning(
-            "Could not check for updates using `git` commands.  You should check manually."
-        )
-
-    if PIP.works():
-        install_pkgs = PIP.check_updates()
-        package_count = len(install_pkgs)
-        if package_count:
-            pkg_list = "The following packages can be updated:\n"
-            for pkg in install_pkgs:
-                pkg_meta = pkg.get("metadata", {})
-                pkg_name = pkg_meta.get("name", "")
-                pkg_ver = pkg_meta.get("version", "")
-                if pkg_name:
-                    pkg_list += f"  {pkg_name}  to version:  {pkg_ver}\n"
-            log.warning(
-                "There may be updates for dependency packages. "
-                "PIP reports %s package(s) could be installed.\n%s",
-                package_count,
-                pkg_list,
-            )
-            needs_update = True
-        else:
-            log.info("No dependency updates available via `pip` command.")
-    else:
-        log.warning(
-            "Could not check for updates using `pip` commands.  You should check manually."
-        )
-    if needs_update:
-        log.info(
-            "You can run a guided update by using the command:\n    %s ./update.py",
-            sys.executable,
-        )
+    log.info(
+        "\nSkipping live update checks. Runtime is expected to be pinned via requirements.lock and a dedicated virtual environment."
+    )
 
 
 def parse_cli_args() -> argparse.Namespace:
@@ -898,10 +851,10 @@ def main() -> None:
 
         m = None
         try:
-            # Prevent re-import of MusicBot
-            if "MusicBot" not in dir():
-                from musicbot.bot import (  # pylint: disable=import-outside-toplevel
-                    MusicBot,
+            if "create_bot" not in dir() or "run_bot" not in dir():
+                from musicbot.app import (  # pylint: disable=import-outside-toplevel
+                    create_bot,
+                    run_bot,
                 )
 
             # py3.8 made ProactorEventLoop default on windows.
@@ -910,14 +863,14 @@ def main() -> None:
             asyncio.set_event_loop(event_loop)
 
             # init some of bot, but don't run it yet.
-            m = MusicBot(use_certifi=use_certifi)
+            m = create_bot(use_certifi=use_certifi)
 
             # register system signal handlers with the event loop.
             if not getattr(event_loop, "_sig_handler_set", False):
                 setup_signal_handlers(event_loop, m.on_os_signal)
 
             # let the MusicBot run free!
-            event_loop.run_until_complete(m.run_musicbot())
+            event_loop.run_until_complete(run_bot(m))
             retries = 0
 
         except (ssl.SSLCertVerificationError, ClientConnectorCertificateError) as e:
@@ -969,78 +922,22 @@ def main() -> None:
                 if "module 'discord'" not in str(e):
                     raise
 
-            if cli_args.no_install_deps:
-                helpfulerr = HelpfulError(
-                    preface="Cannot start MusicBot due to an error!",
-                    issue=(
-                        f"Error: {str(e)}\n"
-                        "This is an error importing MusicBot or a dependency package."
-                    ),
-                    solution=(
-                        "You need to manually install dependency packages via pip.\n"
-                        "Or launch without `--no-install-deps` and MusicBot will try to install them for you."
-                    ),
-                    footnote=(
-                        "You have the `--no-install-deps` option set."
-                        "Normally MusicBot attempts "
-                    ),
-                )
-                log.error(str(helpfulerr))
-                break
-
-            if not PIP.works():
-                log.critical(
-                    "MusicBot could not import dependency modules and we cannot run `pip` automatically!\n"
-                    "You will need to manually install `pip` package for your version of python.\n"
-                )
-                log.warning(
-                    "If you already installed `pip` but still get this error:\n"
-                    " - Check that you installed it for this python version: %s\n"
-                    " - Check installed packages are accessible to the user running MusicBot",
-                    sys.version.split(maxsplit=1)[0],
-                )
-                break
-
-            if not tried_requirementstxt:
-                tried_requirementstxt = True
-
-                log.info(
-                    "Attempting to install MusicBot dependency packages automatically...\n"
-                )
-                pip_exit_code = PIP.run_upgrade_requirements(quiet=False)
-
-                # If pip ran without issue, it should return 0 status code.
-                if pip_exit_code:
-                    print()
-                    dep_error = HelpfulError(
-                        preface="MusicBot dependencies may not be installed!",
-                        issue="We didn't get a clean exit code from `pip` install.",
-                        solution=(
-                            "You will need to manually install dependency packages.\n"
-                            "MusicBot tries to use the following command, so modify as needed:\n"
-                            "  pip install -U -r ./requirements.txt"
-                        ),
-                        footnote="You can also ask for help in MusicBot support server:  https://discord.gg/bots",
-                    )
-                    log.critical(str(dep_error))
-                    break
-
-                print()
-                log.info("OK, lets hope that worked!")
-                print()
-
-                retries += 1
-                continue
-
-            if tried_requirementstxt and retries >= 1:
-                exit_signal = RestartSignal(RestartCode.RESTART_FULL)
-                retries += 1
-                break
-
-            log.error(
-                "MusicBot got an ImportError after trying to install packages. MusicBot must exit..."
+            dep_error = HelpfulError(
+                preface="Cannot start MusicBot due to an error!",
+                issue=(
+                    f"Error: {str(e)}\n"
+                    "This is an error importing MusicBot or a dependency package."
+                ),
+                solution=(
+                    "Create or refresh the dedicated virtual environment and install locked dependencies.\n"
+                    "Recommended command:\n"
+                    "  python3 -m venv .venv && ./.venv/bin/python -m pip install -r requirements.lock"
+                ),
+                footnote=(
+                    "MusicBot no longer installs or upgrades dependencies automatically at runtime."
+                ),
             )
-            log.exception("The exception which caused the above error: ")
+            log.error(str(dep_error))
             retries = 0
             exit_signal = TerminateSignal(exit_code=1)
             break

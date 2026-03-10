@@ -194,6 +194,10 @@ class GuildSpecificData:
         server-specific options intended to persist through shutdowns.
         This method only supports per-server command prefix currently.
         """
+        if hasattr(self._bot, "guild_state_store"):
+            await self._bot.guild_state_store.load(self)
+            return
+
         if self._loading_lock.locked():
             return
 
@@ -250,6 +254,10 @@ class GuildSpecificData:
         Save server-specific options, like the command prefix, to a JSON
         file in the server's data directory.
         """
+        if hasattr(self._bot, "guild_state_store"):
+            await self._bot.guild_state_store.save(self)
+            return
+
         if self._guild_id == 0:
             log.error(
                 "Cannot save data for guild with ID 0. This is likely a bug in the code!"

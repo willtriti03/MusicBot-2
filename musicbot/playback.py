@@ -17,7 +17,7 @@ class PlaybackMode(str, Enum):
     LOCAL = "local"
 
 
-class GuildPlaybackSession:
+class GuildSession:
     def __init__(self, bot: "MusicBot", guild_id: int) -> None:
         self.bot: "MusicBot" = bot
         self.guild_id: int = guild_id
@@ -124,3 +124,6 @@ class GuildPlaybackSession:
             force=force,
         )
         self.sync_state()
+
+
+GuildPlaybackSession = GuildSession
