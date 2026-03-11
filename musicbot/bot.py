@@ -70,7 +70,7 @@ from .permissions import PermissionGroup, Permissions, PermissionsDefaults
 from .player import MusicPlayer
 from .playlist import Playlist
 from .queue_store import QueueStore
-from .runtime import format_runtime_diagnostics
+from .runtime import format_runtime_diagnostics, get_voice_runtime_issue
 from .spotify import Spotify
 from .utils import (
     _func_,
@@ -630,6 +630,13 @@ class MusicBot(commands.Bot):
                         if player.is_stopped and len(player.playlist) > 0:
                             player.play()
 
+                    except exceptions.CommandError as e:
+                        log.warning(
+                            "Skipping auto-join for guild %s: %s",
+                            guild.id,
+                            e.message,
+                        )
+                        continue
                     except (TypeError, exceptions.PermissionsError):
                         continue
 
@@ -645,6 +652,13 @@ class MusicBot(commands.Bot):
                         if player.is_stopped and len(player.playlist) > 0:
                             player.play()
 
+                    except exceptions.CommandError as e:
+                        log.warning(
+                            "Skipping auto-join for guild %s: %s",
+                            guild.id,
+                            e.message,
+                        )
+                        continue
                     except (TypeError, exceptions.PermissionsError):
                         continue
 
@@ -765,6 +779,19 @@ class MusicBot(commands.Bot):
         """
         if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
             raise TypeError("Channel passed must be a voice channel")
+
+        voice_runtime_issue = get_voice_runtime_issue(
+            discord,
+            requires_dave=not isinstance(channel, discord.StageChannel),
+        )
+        if voice_runtime_issue:
+            log.error(
+                "Blocking voice connection for guild %s channel %s: %s",
+                channel.guild.id,
+                channel.id,
+                voice_runtime_issue,
+            )
+            raise exceptions.CommandError(voice_runtime_issue, expire_in=30)
 
         chperms = channel.permissions_for(channel.guild.me)
         if not chperms.connect:

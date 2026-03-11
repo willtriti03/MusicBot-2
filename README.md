@@ -21,6 +21,9 @@ python3.13 run.py
 
 The main configuration file is `config/options.ini`. If it does not exist yet, copy [`config/1_options.ini`](./config/1_options.ini) to `config/options.ini`.
 
+## Voice Runtime Note
+Discord enforced DAVE on regular voice channels on 2026-03-01. This repository now refuses regular voice-channel joins when the installed Discord Python wrapper does not expose DAVE negotiation hooks, instead of joining and immediately getting disconnected by Discord.
+
 ### Commands
 
 There are many commands that can be used with the bot. Most notably, the `play <url>` command (preceded by your command prefix), which will download, process, and play a song from YouTube or a similar site. A full list of commands is available [here](https://just-some-bots.github.io/MusicBot/using/commands/ "Commands").

@@ -1,6 +1,7 @@
 #
 # Use requirements.lock for reproducible deployments. The py-cord minimum below
-# keeps manual installs on the DAVE-era voice stack.
+# keeps manual installs on the latest tested wrapper stack, but regular voice
+# channels still require a DAVE-capable Discord transport at runtime.
 #
 pynacl
 py-cord[voice]>=2.7.1

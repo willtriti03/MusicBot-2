@@ -33,6 +33,7 @@ from musicbot.runtime import (
     LOCKED_RUNTIME,
     REQUIRED_VOICE_MODE,
     format_supported_python_range,
+    get_voice_runtime_issue,
     get_max_python_version_exclusive,
     get_min_python_version,
     has_required_voice_mode,
@@ -491,6 +492,13 @@ def req_check_deps() -> None:
                 REQUIREMENTS_FILE,
             )
             bugger_off()
+
+        voice_runtime_issue = get_voice_runtime_issue(discord, requires_dave=True)
+        if voice_runtime_issue:
+            log.error(
+                "Voice playback is unavailable with the current runtime: %s",
+                voice_runtime_issue,
+            )
     except ImportError:
         # if we can't import discord.py, an error will be thrown later down the line anyway
         pass
