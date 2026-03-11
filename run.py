@@ -29,6 +29,13 @@ from musicbot.exceptions import (
     RestartSignal,
     TerminateSignal,
 )
+from musicbot.runtime import (
+    LOCKED_RUNTIME,
+    REQUIRED_VOICE_MODE,
+    get_min_python_version,
+    has_required_voice_mode,
+    is_version_at_least,
+)
 from musicbot.utils import (
     rotate_log_files,
     set_logging_level,
@@ -45,6 +52,10 @@ except ImportError:
     pass
 
 log = logging.getLogger("musicbot.launcher")
+MIN_PYTHON_VERSION = get_min_python_version()
+MIN_PYTHON_LABEL = ".".join(str(part) for part in MIN_PYTHON_VERSION)
+PYTHON_SEARCH_MINORS = tuple(range(MIN_PYTHON_VERSION[1], 14))
+REQUIREMENTS_FILE = "requirements.lock"
 
 
 class GIT:
@@ -233,11 +244,11 @@ class PIP:
     @classmethod
     def check_updates(cls) -> List[Dict[str, Any]]:
         """
-        Runs `pip install -U -r ./requirements.txt --quiet --dry-run --report -`
+        Runs `pip install -U -r ./requirements.lock --quiet --dry-run --report -`
         and returns the number of packages that could be updated.
         """
         updata = cls.run_install(
-            "-U -r ./requirements.txt --quiet --dry-run --report -",
+            f"-U -r ./{REQUIREMENTS_FILE} --quiet --dry-run --report -",
             check_output=True,
         )
         try:
@@ -262,7 +273,7 @@ class PIP:
     ) -> Union[str, int]:
         """
         Uses a subprocess call to run python using sys.executable.
-        Runs `pip install --no-warn-script-location --no-input -U -r ./requirements.txt`
+        Runs `pip install --no-warn-script-location --no-input -U -r ./requirements.lock`
         This method attempts to catch all exceptions and ensure a return value.
 
         :param: get_output:  Return the process output rather than its exit code.
@@ -275,7 +286,8 @@ class PIP:
             raise RuntimeError("Cannot locate or execute python -m pip")
 
         log.info(
-            "Attempting to upgrade with `pip install --upgrade -r requirements.txt` on current path..."
+            "Attempting to upgrade with `pip install --upgrade -r %s` on current path...",
+            REQUIREMENTS_FILE,
         )
         try:
             raw_data = cls.run_python_m(
@@ -285,7 +297,7 @@ class PIP:
                     "--no-input",
                     "-U",
                     "-r",
-                    "requirements.txt",
+                    REQUIREMENTS_FILE,
                 ],
                 check_output=get_output,
                 quiet=quiet,
@@ -315,7 +327,8 @@ class PIP:
                 "Upgrade failed to execute or we could not understand the output"
             )
             log.warning(
-                "You may need to run `pip install --upgrade -r requirements.txt` manually."
+                "You may need to run `pip install --upgrade -r %s` manually.",
+                REQUIREMENTS_FILE,
             )
 
             if get_output:
@@ -338,7 +351,7 @@ def sanity_checks(args: argparse.Namespace) -> None:
     """
     log.info("Starting sanity checks")
     """Required Checks"""
-    # Make sure we're on Python 3.8+
+    # Make sure we're on a supported Python runtime.
     req_ensure_py3()
 
     # Make sure we're in a writable env
@@ -373,67 +386,70 @@ def req_ensure_py3() -> None:
     Verify the current running version of Python and attempt to find a
     suitable minimum version in the system if the running version is too old.
     """
-    log.info("Checking for Python 3.8+")
+    log.info("Checking for Python %s+", MIN_PYTHON_LABEL)
 
-    if sys.version_info < (3, 8):
-        log.warning(
-            "Python 3.8+ is required. This version is %s", sys.version.split()[0]
-        )
-        log.warning("Attempting to locate Python 3.8...")
-        # Should we look for other versions than min-ver?
+    if sys.version_info >= MIN_PYTHON_VERSION:
+        log.info("Python version:  %s", sys.version)
+        return
 
-        pycom = None
+    log.warning(
+        "Python %s+ is required. This version is %s",
+        MIN_PYTHON_LABEL,
+        sys.version.split()[0],
+    )
+    log.warning("Attempting to locate Python %s or newer...", MIN_PYTHON_LABEL)
 
-        if sys.platform.startswith("win"):
-            pycom = shutil.which("py.exe")
-            if not pycom:
-                log.warning("Could not locate py.exe")
-
-            try:
-                subprocess.check_output([pycom, "-3.8", '-c "exit()"'])
-                pycom = f"{pycom} -3.8"
-            except (
-                OSError,
-                PermissionError,
-                FileNotFoundError,
-                subprocess.CalledProcessError,
-            ):
-                log.warning("Could not execute `py.exe -3.8` ")
-                pycom = None
-
-            if pycom:
-                log.info("Python 3 found.  Launching bot...")
-                os.system(f"start cmd /k {pycom} run.py")
-                sys.exit(0)
-
+    if sys.platform.startswith("win"):
+        launcher = shutil.which("py.exe")
+        if not launcher:
+            log.warning("Could not locate py.exe")
         else:
-            log.info('Trying "python3.8"')
-            pycom = shutil.which("python3.8")
+            for minor in PYTHON_SEARCH_MINORS:
+                candidate_version = f"3.{minor}"
+                try:
+                    subprocess.check_output(
+                        [launcher, f"-{candidate_version}", "-c", "exit()"]
+                    )
+                    log.info("Python %s found. Launching bot...", candidate_version)
+                    os.system(f"start cmd /k {launcher} -{candidate_version} run.py")
+                    sys.exit(0)
+                except (
+                    OSError,
+                    PermissionError,
+                    FileNotFoundError,
+                    subprocess.CalledProcessError,
+                ):
+                    continue
+    else:
+        for minor in PYTHON_SEARCH_MINORS:
+            candidate = f"python3.{minor}"
+            log.info('Trying "%s"', candidate)
+            pycom = shutil.which(candidate)
             if not pycom:
-                log.warning("Could not locate python3.8 on path.")
+                continue
 
             try:
-                subprocess.check_output([pycom, '-c "exit()"'])
-            except (
-                OSError,
-                PermissionError,
-                FileNotFoundError,
-                subprocess.CalledProcessError,
-            ):
-                pycom = None
-
-            if pycom:
+                subprocess.check_output([pycom, "-c", "exit()"])
                 log.info(
-                    "\nPython 3.8 found.  Re-launching bot using: %s run.py\n", pycom
+                    "\nPython 3.%s found.  Re-launching bot using: %s run.py\n",
+                    minor,
+                    pycom,
                 )
                 os.execlp(pycom, pycom, "run.py")
+            except (
+                OSError,
+                PermissionError,
+                FileNotFoundError,
+                subprocess.CalledProcessError,
+            ):
+                continue
 
-        log.critical(
-            "Could not find Python 3.8 or higher.  Please run the bot using Python 3.8"
-        )
-        bugger_off()
-    else:
-        log.info("Python version:  %s", sys.version)
+    log.critical(
+        "Could not find Python %s or higher. Please run the bot using Python %s",
+        MIN_PYTHON_LABEL,
+        MIN_PYTHON_LABEL,
+    )
+    bugger_off()
 
 
 def req_check_deps() -> None:
@@ -443,11 +459,31 @@ def req_check_deps() -> None:
     try:
         import discord  # pylint: disable=import-outside-toplevel
 
-        if discord.version_info.major < 2:
+        installed_version = getattr(discord, "__version__", "0")
+        if not is_version_at_least(installed_version, LOCKED_RUNTIME["py-cord"]):
             log.critical(
-                "This version of MusicBot requires a newer version of discord.py. "
-                "Your version is %s. Try running update.py.",
-                discord.__version__,
+                "This version of MusicBot requires py-cord %s or newer. "
+                "Your version is %s.",
+                LOCKED_RUNTIME["py-cord"],
+                installed_version,
+            )
+            log.critical(
+                "Install the locked runtime with `%s -m pip install -U -r %s`.",
+                sys.executable,
+                REQUIREMENTS_FILE,
+            )
+            bugger_off()
+
+        if not has_required_voice_mode(discord):
+            log.critical(
+                "Installed py-cord runtime does not expose `%s`, which Discord voice "
+                "now requires for encrypted voice sessions.",
+                REQUIRED_VOICE_MODE,
+            )
+            log.critical(
+                "Install the locked runtime with `%s -m pip install -U -r %s`.",
+                sys.executable,
+                REQUIREMENTS_FILE,
             )
             bugger_off()
     except ImportError:

@@ -1,5 +1,9 @@
+#
+# Use requirements.lock for reproducible deployments. The py-cord minimum below
+# keeps manual installs on the DAVE-era voice stack.
+#
 pynacl
-py-cord[voice]>=2.4.0
+py-cord[voice]>=2.7.1
 pip
 yt-dlp>=2024.1.0
 colorlog

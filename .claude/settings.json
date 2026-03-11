@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"ping\\\\|EnableNetworkChecker\" /Users/leejungjun/MusicBot-2/musicbot/*.py)"
+    ]
+  }
+}

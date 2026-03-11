@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import platform
+import re
 import sys
 from importlib import metadata
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 LOCKED_RUNTIME: Dict[str, str] = {
@@ -15,6 +16,7 @@ LOCKED_RUNTIME: Dict[str, str] = {
     "SpeechRecognition": "3.14.6",
     "python-dotenv": "1.2.2",
 }
+REQUIRED_VOICE_MODE = "aead_xchacha20_poly1305_rtpsize"
 
 
 def get_installed_version(package_name: str) -> Optional[str]:
@@ -22,6 +24,32 @@ def get_installed_version(package_name: str) -> Optional[str]:
         return metadata.version(package_name)
     except metadata.PackageNotFoundError:
         return None
+
+
+def parse_version_tuple(version: str) -> Tuple[int, ...]:
+    parts = tuple(int(part) for part in re.findall(r"\d+", version))
+    return parts or (0,)
+
+
+def is_version_at_least(installed_version: str, minimum_version: str) -> bool:
+    return parse_version_tuple(installed_version) >= parse_version_tuple(minimum_version)
+
+
+def get_min_python_version() -> Tuple[int, ...]:
+    return parse_version_tuple(LOCKED_RUNTIME["python"])
+
+
+def has_required_voice_mode(discord_module: Any) -> bool:
+    voice_client_module = getattr(discord_module, "voice_client", None)
+    voice_client_cls = getattr(voice_client_module, "VoiceClient", None)
+    if voice_client_cls is None:
+        return False
+
+    supported_modes = getattr(voice_client_cls, "supported_modes", ())
+    if REQUIRED_VOICE_MODE in supported_modes:
+        return True
+
+    return hasattr(voice_client_cls, "_encrypt_aead_xchacha20_poly1305_rtpsize")
 
 
 def collect_runtime_diagnostics() -> Dict[str, str]:

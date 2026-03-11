@@ -42,7 +42,7 @@ DATA_GUILD_FILE_CUR_SONG: str = "current.txt"
 DATA_GUILD_FILE_OPTIONS: str = "options.json"
 
 # Example config files.
-EXAMPLE_OPTIONS_FILE: str = "config/example_options.ini"
+EXAMPLE_OPTIONS_FILE: str = "config/1_options.ini"
 EXAMPLE_PERMS_FILE: str = "config/example_permissions.ini"
 EXAMPLE_COMMAND_ALIAS_FILE: str = "config/example_aliases.json"
 

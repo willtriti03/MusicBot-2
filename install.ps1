@@ -108,7 +108,7 @@ else
 # --------------------------------------------------PULLING THE BOT----------------------------------------------------
 
 # Test if we need to pull the bot or not by checking for some files.
-$MB_Reqs_File=(pwd).Path + '\requirements.txt'
+$MB_Reqs_File=(pwd).Path + '\requirements.lock'
 $MB_Module_Dir=(pwd).Path + '\musicbot'
 $MB_Git_Dir=(pwd).Path + '\.git'
 
@@ -149,14 +149,14 @@ if((Test-Path $MB_Reqs_File) -and (Test-Path $MB_Module_Dir) -and (Test-Path $MB
 
 if (Get-Command "python" -errorAction SilentlyContinue)
 {
-    Invoke-Expression "python -c 'import sys; exit(0 if sys.version_info >= (3, 8) else 1)'" | Out-Null
+    Invoke-Expression "python -c 'import sys; exit(0 if sys.version_info >= (3, 10) else 1)'" | Out-Null
     if($LastExitCode -eq 0)
     {
         $PYTHON = "python"
     }
 }
 
-$versionArray = "3.8", "3.9", "3.10", "3.11", "3.12"
+$versionArray = "3.10", "3.11", "3.12", "3.13"
 
 foreach ($version in $versionArray)
 {
@@ -168,7 +168,7 @@ foreach ($version in $versionArray)
 }
 
 "Using $PYTHON to install and run MusicBot..."
-Invoke-Expression "$PYTHON -m pip install --upgrade -r requirements.txt" 
+Invoke-Expression "$PYTHON -m pip install --upgrade -r requirements.lock" 
 
 # -------------------------------------------------CONFIGURE THE BOT---------------------------------------------------
 ""
@@ -186,7 +186,10 @@ if($iagree -ne "Y" -and $iagree -ne "y")
 }
 
 
-Copy-Item ".\config\example_options.ini" -Destination ".\config\options.ini"
+if (!(Test-Path ".\config\options.ini"))
+{
+    Copy-Item ".\config\1_options.ini" -Destination ".\config\options.ini"
+}
 
 # GET AND VERIFY TOKEN
 ""

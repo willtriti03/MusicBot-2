@@ -19,7 +19,7 @@ DEBUG=0
 #----------------------------------------------Constants----------------------------------------------#
 DEFAULT_URL_BASE="https://discordapp.com/api"
 # Suported versions of python using only major.minor format
-PySupported=("3.8" "3.9" "3.10" "3.11" "3.12")
+PySupported=("3.10" "3.11" "3.12" "3.13")
 PyBin="python3"
 # Path updated by find_python
 PyBinPath="$(command -v "$PyBin")"
@@ -87,25 +87,11 @@ function find_python() {
         PY_VER_PATCH=$((PY_VER[2]))
         # echo "run.sh detected $PY_BIN version: $PY_VER_MAJOR.$PY_VER_MINOR.$PY_VER_PATCH"
 
-        # Major version must be 3+
-        if [[ $PY_VER_MAJOR -ge 3 ]]; then
-            # If 3, minor version minimum is 3.8
-            if [[ $PY_VER_MINOR -eq 8 ]]; then
-                # if 3.8, patch version minimum is 3.8.7
-                if [[ $PY_VER_PATCH -ge 7 ]]; then
-                    PyBinPath="$(command -v "$PyBinTest")"
-                    PyBin="$PyBinTest"
-                    debug "Selected: $PyBinTest  @  $PyBinPath"
-                    return 0
-                fi
-            fi
-            # if 3.9+ it should work.
-            if [[ $PY_VER_MINOR -ge 9 ]]; then
-                PyBinPath="$(command -v "$PyBinTest")"
-                PyBin="$PyBinTest"
-                debug "Selected: $PyBinTest  @  $PyBinPath"
-                return 0
-            fi
+        if [[ $PY_VER_MAJOR -eq 3 && $PY_VER_MINOR -ge 10 ]]; then
+            PyBinPath="$(command -v "$PyBinTest")"
+            PyBin="$PyBinTest"
+            debug "Selected: $PyBinTest  @  $PyBinPath"
+            return 0
         fi
     done
 
@@ -120,7 +106,7 @@ function pull_musicbot_git() {
     # Check if we're running inside a previously pulled repo.
     GitDir="${PWD}/.git"
     BotDir="${PWD}/musicbot"
-    ReqFile="${PWD}/requirements.txt"
+    ReqFile="${PWD}/requirements.lock"
     if [ -d "$GitDir" ] && [ -d "$BotDir" ] && [ -f "$ReqFile" ] ; then
         echo "Existing MusicBot repo detected."
         read -rp "Would you like to install using the current repo? [Y/n]" UsePwd
@@ -129,10 +115,12 @@ function pull_musicbot_git() {
             CloneDir="${PWD}"
             VenvDir="${CloneDir}/Venv"
 
-            $PyBin -m pip install --upgrade -r requirements.txt
+            $PyBin -m pip install --upgrade -r requirements.lock
             echo ""
 
-            cp ./config/example_options.ini ./config/options.ini
+            if [ ! -f ./config/options.ini ] ; then
+                cp ./config/1_options.ini ./config/options.ini
+            fi
             return 0
         fi
         echo "Installer will attempt to create a new directory for MusicBot."
@@ -176,10 +164,12 @@ function pull_musicbot_git() {
     esac
     cd "${CloneDir}" || exit_err "Fatal:  Could not change to MusicBot directory."
 
-    $PyBin -m pip install --upgrade -r requirements.txt
+    $PyBin -m pip install --upgrade -r requirements.lock
     echo ""
 
-    cp ./config/example_options.ini ./config/options.ini
+    if [ ! -f ./config/options.ini ] ; then
+        cp ./config/1_options.ini ./config/options.ini
+    fi
 }
 
 function setup_as_service() {
@@ -610,7 +600,7 @@ case $DISTRO_NAME in
         sudo yum install epel-release
         sudo yum localinstall --nogpgcheck https://download1.rpmfusion.org/free/el/rpmfusion-free-release-7.noarch.rpm
 
-        # Install available packages and libraries for building python 3.8+
+        # Install available packages and libraries for building python 3.10+
         sudo yum -y groupinstall "Development Tools"
         sudo yum -y install opus-devel libffi-devel openssl-devel bzip2-devel \
             git curl jq ffmpeg

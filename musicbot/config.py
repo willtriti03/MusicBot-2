@@ -1040,7 +1040,7 @@ class Config:
 
                 else:
                     raise HelpfulError(
-                        "Your config files are missing. Neither options.ini nor example_options.ini were found.",
+                        "Your config files are missing. Neither options.ini nor the bundled options template were found.",
                         "Grab the files back from the archive or remake them yourself and copy paste the content "
                         "from the repo. Stop removing important files!",
                     )

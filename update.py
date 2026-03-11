@@ -129,10 +129,10 @@ def update_deps() -> None:
             "--user",
             "-U",
             "-r",
-            "requirements.txt",
+            "requirements.lock",
         ],
         "Could not update dependencies. You need to update manually. "
-        f"Run:  {sys.executable} -m pip install -U -r requirements.txt",
+        f"Run:  {sys.executable} -m pip install -U -r requirements.lock",
     )
 
 

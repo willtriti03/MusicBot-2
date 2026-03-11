@@ -162,6 +162,7 @@ class MusicBot(commands.Bot):
         self.on_ready_count: int = 0
         self.init_ok: bool = False
         self.logout_called: bool = False
+        self._runtime_cleanup_complete: bool = False
         self.cached_app_info: Optional[discord.AppInfo] = None
         self.last_status: Optional[discord.BaseActivity] = None
         self.players: Dict[int, MusicPlayer] = {}
@@ -268,6 +269,8 @@ class MusicBot(commands.Bot):
                 headers={"User-Agent": self.http.user_agent}
             )
 
+        await self.voice_recognition_handler.set_http_session(self.session)
+
         if self.config.spotify_enabled:
             try:
                 self.spotify = Spotify(
@@ -289,7 +292,7 @@ class MusicBot(commands.Bot):
                     e,
                 )
                 self.config.spotify_enabled = False
-                time.sleep(5)  # make sure they see the problem
+                await asyncio.sleep(5)  # make sure they see the problem
         else:
             try:
                 log.warning(
@@ -2145,6 +2148,8 @@ class MusicBot(commands.Bot):
                 await asyncio.gather(*pending_tasks, return_exceptions=True)
                 await asyncio.sleep(0.5)
 
+            await self._cleanup_runtime_resources()
+
             # ensure connector is closed.
             if self.http.connector:
                 log.debug("Closing HTTP Connector.")
@@ -2161,6 +2166,40 @@ class MusicBot(commands.Bot):
             if self.exit_signal:
                 raise self.exit_signal
 
+    async def _cleanup_runtime_resources(self) -> None:
+        """Release background resources once during shutdown."""
+        if self._runtime_cleanup_complete:
+            return
+
+        self._runtime_cleanup_complete = True
+
+        try:
+            await self.voice_listener.stop_all_listening()
+        except Exception:
+            log.warning("Failed to stop voice listeners during shutdown.", exc_info=True)
+
+        try:
+            await self.voice_recognition_handler.close()
+        except Exception:
+            log.warning(
+                "Failed to close voice recognition resources during shutdown.",
+                exc_info=True,
+            )
+
+        try:
+            await asyncio.to_thread(self.downloader.shutdown)
+        except Exception:
+            log.warning("Failed to shut down downloader thread pool.", exc_info=True)
+
+    async def close(self) -> None:
+        """Close bot connections and release background resources."""
+        await self._cleanup_runtime_resources()
+
+        if self.is_closed():
+            return
+
+        await super().close()
+
     async def logout(self) -> None:
         """
         Disconnect all voice clients and signal MusicBot to close it's connections to discord.
@@ -2170,7 +2209,7 @@ class MusicBot(commands.Bot):
 
         self.logout_called = True
         await self.disconnect_all_voice_clients()
-        return await super().close()
+        await self.close()
 
     async def on_error(self, event: str, /, *_args: Any, **_kwargs: Any) -> None:
         _ex_type, ex, _stack = sys.exc_info()
@@ -2402,7 +2441,7 @@ class MusicBot(commands.Bot):
                     "Your config file is missing some options. Defaults will be used for this session.\n"
                     f"Here is a list of options we think are missing:\n{missing_list}"
                 ),
-                solution="Check the example_options.ini file for newly added options and copy them to your config.",
+                solution="Check the bundled options template (config/1_options.ini) for newly added options and copy them to your config.",
                 footnote="You can also use the `config` command to set the missing options.",
             )
             log.warning(str(conf_warn)[1:])
@@ -4315,7 +4354,12 @@ class MusicBot(commands.Bot):
                     await self.cmd_summon(guild, author, message)
                     player = self.get_player_in(guild)
                 except Exception:
-                    pass
+                    log.warning(
+                        "Auto-summon failed during move command in guild %s for author %s.",
+                        guild.id,
+                        getattr(author, "id", "unknown"),
+                        exc_info=True,
+                    )
             
             if not player:
                 prefix = self.server_data[guild.id].command_prefix
@@ -7782,7 +7826,7 @@ class MusicBot(commands.Bot):
                     "install",
                     "-U",
                     "-r",
-                    "./requirements.txt",
+                    "./requirements.lock",
                     "--quiet",
                     "--dry-run",
                     "--report",
@@ -8390,6 +8434,9 @@ class MusicBot(commands.Bot):
 
     async def on_socket_event_type(self, event_type: str) -> None:
         """Event called by discord.py on any socket event."""
+        if not self.config.debug_mode:
+            return
+
         log.everything(  # type: ignore[attr-defined]
             "Got a Socket Event:  %s", event_type
         )

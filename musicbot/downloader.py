@@ -81,6 +81,7 @@ class Downloader:
         self.download_folder: pathlib.Path = bot.config.audio_cache_path
         # NOTE: this executor may not be good for long-running downloads...
         self.thread_pool = ThreadPoolExecutor(max_workers=DEFAULT_MAX_INFO_DL_THREADS)
+        self._thread_pool_shutdown = False
 
         # force ytdlp and HEAD requests to use the same UA string.
         self.http_req_headers = {
@@ -120,6 +121,14 @@ class Downloader:
     def ytdl(self) -> youtube_dl.YoutubeDL:
         """Get the Safe (errors ignored) instance of YoutubeDL."""
         return self.safe_ytdl
+
+    def shutdown(self) -> None:
+        """Shut down the extractor thread pool once during bot teardown."""
+        if self._thread_pool_shutdown:
+            return
+
+        self._thread_pool_shutdown = True
+        self.thread_pool.shutdown(wait=True)
 
     def get_url_or_none(self, url: str) -> Optional[str]:
         """

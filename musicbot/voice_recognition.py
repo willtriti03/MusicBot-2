@@ -6,8 +6,7 @@ Discord 음성 채널에서 음성을 실시간으로 인식하고 명령어를 
 import os
 import asyncio
 import logging
-import inspect
-from typing import Optional, Callable, Dict, List, Any
+from typing import Optional, Callable, Dict, Any
 import discord
 import speech_recognition as sr
 from io import BytesIO
@@ -46,6 +45,9 @@ class VoiceRecognitionHandler:
         self.recognizer = sr.Recognizer()
         self.is_listening = False
         self.command_callbacks: Dict[str, Callable] = {}
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._owns_session = False
+        self._recognition_lock = asyncio.Lock()
 
         # 음성 인식 설정 - 문장 단위로 인식하도록 조정
         self.recognizer.energy_threshold = 300  # 배경 소음 감지 임계값
@@ -55,6 +57,55 @@ class VoiceRecognitionHandler:
         self.recognizer.non_speaking_duration = 0.8  # 침묵으로 판단하는 시간
 
         log.info(f"VoiceRecognitionHandler initialized with bot_name: {bot_name}")
+
+    async def set_http_session(
+        self, session: Optional[aiohttp.ClientSession]
+    ) -> None:
+        """Attach the bot-managed session for webhook delivery."""
+        if (
+            self._owns_session
+            and self._session
+            and not self._session.closed
+            and self._session is not session
+        ):
+            await self._session.close()
+
+        self._session = session
+        self._owns_session = False
+
+    async def close(self) -> None:
+        """Close any session owned by the voice recognition handler."""
+        if self._owns_session and self._session and not self._session.closed:
+            await self._session.close()
+
+        self._session = None
+        self._owns_session = False
+
+    async def _get_http_session(self) -> aiohttp.ClientSession:
+        """Reuse the bot session when available, otherwise create a fallback."""
+        if self._session and not self._session.closed:
+            return self._session
+
+        self._session = aiohttp.ClientSession()
+        self._owns_session = True
+        return self._session
+
+    def _recognize_audio_sync(self, audio_data: bytes, sample_rate: int) -> str:
+        """Run blocking speech_recognition work outside the event loop."""
+        audio_io = BytesIO()
+        with wave.open(audio_io, "wb") as wav_file:
+            wav_file.setnchannels(2)  # Discord는 스테레오
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(audio_data)
+
+        audio_io.seek(0)
+
+        with sr.AudioFile(audio_io) as source:
+            self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
+            audio = self.recognizer.record(source)
+
+        return self.recognizer.recognize_google(audio, language="ko-KR")
 
     def register_command(self, command: str, callback: Callable):
         """
@@ -79,29 +130,12 @@ class VoiceRecognitionHandler:
             인식된 텍스트 또는 None
         """
         try:
-            # PCM 데이터를 WAV 형식으로 변환
-            audio_io = BytesIO()
-            with wave.open(audio_io, 'wb') as wav_file:
-                wav_file.setnchannels(2)  # Discord는 스테레오
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(sample_rate)
-                wav_file.writeframes(audio_data)
-
-            audio_io.seek(0)
-
-            # speech_recognition의 AudioData 형식으로 변환
-            with sr.AudioFile(audio_io) as source:
-                # 배경 소음 조정
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
-                audio = self.recognizer.record(source)
-
-            # Google Speech Recognition API를 사용하여 음성 인식
-            # 한국어로 인식 시도
-            text = await asyncio.to_thread(
-                self.recognizer.recognize_google,
-                audio,
-                language="ko-KR"
-            )
+            async with self._recognition_lock:
+                text = await asyncio.to_thread(
+                    self._recognize_audio_sync,
+                    audio_data,
+                    sample_rate,
+                )
 
             log.info(f"✅ Recognized speech: {text}")
 
@@ -129,16 +163,16 @@ class VoiceRecognitionHandler:
             text: 인식된 텍스트
         """
         try:
-            async with aiohttp.ClientSession() as session:
-                data = {
-                    "content": f"🎤 **음성 인식**: {text}",
-                    "username": "!음성 인식 로그"
-                }
-                async with session.post(WEBHOOK_URL, json=data) as resp:
-                    if resp.status == 204:
-                        log.debug(f"Webhook sent successfully: {text}")
-                    else:
-                        log.warning(f"Webhook failed with status {resp.status}")
+            session = await self._get_http_session()
+            data = {
+                "content": f"🎤 **음성 인식**: {text}",
+                "username": "!음성 인식 로그"
+            }
+            async with session.post(WEBHOOK_URL, json=data) as resp:
+                if resp.status == 204:
+                    log.debug(f"Webhook sent successfully: {text}")
+                else:
+                    log.warning(f"Webhook failed with status {resp.status}")
         except Exception as e:
             log.debug(f"Error sending webhook: {e}")
 
@@ -288,7 +322,12 @@ class RealtimeAudioSink(DiscordSink):
     Discord 음성 채널에서 오디오를 실시간으로 수신하는 Sink
     """
 
-    def __init__(self, recognition_handler: VoiceRecognitionHandler, callback):
+    def __init__(
+        self,
+        recognition_handler: VoiceRecognitionHandler,
+        callback,
+        loop: Optional[asyncio.AbstractEventLoop] = None,
+    ):
         super().__init__()
         self.recognition_handler = recognition_handler
         self.callback = callback
@@ -304,10 +343,12 @@ class RealtimeAudioSink(DiscordSink):
         self.max_buffer_duration = 8.0  # 최대 버퍼 시간 (8초)
 
         # Event loop 저장 (스레드 안전성을 위해)
-        try:
-            self.loop = asyncio.get_event_loop()
-        except RuntimeError:
-            self.loop = None
+        self.loop = loop
+        if self.loop is None:
+            try:
+                self.loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self.loop = None
 
     def write(self, data, user):
         """
@@ -480,7 +521,11 @@ class VoiceListener:
                 log.error(f"❌ Error in voice detection callback: {e}", exc_info=True)
 
         # RealtimeAudioSink 생성
-        sink = RealtimeAudioSink(self.recognition_handler, on_voice_detected)
+        sink = RealtimeAudioSink(
+            self.recognition_handler,
+            on_voice_detected,
+            loop=asyncio.get_running_loop(),
+        )
         sink.bot_id = self.bot.user.id if self.bot.user else None
         self.active_sinks[guild_id] = sink
 
@@ -532,6 +577,27 @@ class VoiceListener:
             del self.active_sinks[guild_id]
 
         log.info(f"🔇 Stopped listening in guild {guild_id}")
+
+    async def stop_all_listening(self) -> None:
+        """Clean up any active recording sinks during shutdown."""
+        for guild_id in list(self.active_sinks.keys()):
+            guild = self.bot.get_guild(guild_id)
+            voice_client = guild.voice_client if guild else None
+
+            if voice_client:
+                try:
+                    await self.stop_listening(voice_client)
+                    continue
+                except Exception:
+                    log.warning(
+                        "Failed to stop voice listener cleanly for guild %s during shutdown.",
+                        guild_id,
+                        exc_info=True,
+                    )
+
+            sink = self.active_sinks.pop(guild_id, None)
+            if sink:
+                sink.cleanup()
 
     def is_listening(self, guild_id: int) -> bool:
         """
