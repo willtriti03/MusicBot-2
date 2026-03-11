@@ -32,8 +32,11 @@ from musicbot.exceptions import (
 from musicbot.runtime import (
     LOCKED_RUNTIME,
     REQUIRED_VOICE_MODE,
+    format_supported_python_range,
+    get_max_python_version_exclusive,
     get_min_python_version,
     has_required_voice_mode,
+    is_python_version_supported,
     is_version_at_least,
 )
 from musicbot.utils import (
@@ -53,8 +56,11 @@ except ImportError:
 
 log = logging.getLogger("musicbot.launcher")
 MIN_PYTHON_VERSION = get_min_python_version()
-MIN_PYTHON_LABEL = ".".join(str(part) for part in MIN_PYTHON_VERSION)
-PYTHON_SEARCH_MINORS = tuple(range(MIN_PYTHON_VERSION[1], 14))
+MAX_PYTHON_VERSION_EXCLUSIVE = get_max_python_version_exclusive()
+SUPPORTED_PYTHON_LABEL = format_supported_python_range()
+PYTHON_SEARCH_MINORS = tuple(
+    range(MIN_PYTHON_VERSION[1], MAX_PYTHON_VERSION_EXCLUSIVE[1])
+)
 REQUIREMENTS_FILE = "requirements.lock"
 
 
@@ -384,20 +390,20 @@ def sanity_checks(args: argparse.Namespace) -> None:
 def req_ensure_py3() -> None:
     """
     Verify the current running version of Python and attempt to find a
-    suitable minimum version in the system if the running version is too old.
+    supported version in the system if the current one is unsupported.
     """
-    log.info("Checking for Python %s+", MIN_PYTHON_LABEL)
+    log.info("Checking for supported Python %s", SUPPORTED_PYTHON_LABEL)
 
-    if sys.version_info >= MIN_PYTHON_VERSION:
+    if is_python_version_supported(sys.version_info[:3]):
         log.info("Python version:  %s", sys.version)
         return
 
     log.warning(
-        "Python %s+ is required. This version is %s",
-        MIN_PYTHON_LABEL,
+        "Python %s is required. This version is %s",
+        SUPPORTED_PYTHON_LABEL,
         sys.version.split()[0],
     )
-    log.warning("Attempting to locate Python %s or newer...", MIN_PYTHON_LABEL)
+    log.warning("Attempting to locate a supported Python interpreter...")
 
     if sys.platform.startswith("win"):
         launcher = shutil.which("py.exe")
@@ -445,9 +451,8 @@ def req_ensure_py3() -> None:
                 continue
 
     log.critical(
-        "Could not find Python %s or higher. Please run the bot using Python %s",
-        MIN_PYTHON_LABEL,
-        MIN_PYTHON_LABEL,
+        "Could not find a supported Python version. Please run the bot using Python %s",
+        SUPPORTED_PYTHON_LABEL,
     )
     bugger_off()
 
@@ -500,9 +505,7 @@ def req_ensure_env() -> None:
     """
     log.info("Ensuring we're in the right environment")
 
-    if os.environ.get("APP_ENV") != "docker" and not os.path.isdir(
-        b64decode("LmdpdA==").decode("utf-8")
-    ):
+    if not os.path.isdir(b64decode("LmdpdA==").decode("utf-8")):
         log.critical(
             b64decode(
                 "Qm90IHdhc24ndCBpbnN0YWxsZWQgdXNpbmcgR2l0LiBSZWluc3RhbGwgdXNpbmcgaHR0cDovL2JpdC5seS9tdXNpY2JvdGRvY3Mu"
@@ -967,7 +970,7 @@ def main() -> None:
                 solution=(
                     "Install the locked dependencies into the Python environment you are using to run MusicBot.\n"
                     "Recommended command:\n"
-                    "  python3 -m pip install -r requirements.lock"
+                    "  python3.13 -m pip install -r requirements.lock"
                 ),
                 footnote=(
                     "MusicBot no longer installs or upgrades dependencies automatically at runtime."

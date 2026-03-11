@@ -17,6 +17,7 @@ LOCKED_RUNTIME: Dict[str, str] = {
     "python-dotenv": "1.2.2",
 }
 REQUIRED_VOICE_MODE = "aead_xchacha20_poly1305_rtpsize"
+SUPPORTED_PYTHON_MAX_EXCLUSIVE: Tuple[int, ...] = (3, 14)
 
 
 def get_installed_version(package_name: str) -> Optional[str]:
@@ -37,6 +38,23 @@ def is_version_at_least(installed_version: str, minimum_version: str) -> bool:
 
 def get_min_python_version() -> Tuple[int, ...]:
     return parse_version_tuple(LOCKED_RUNTIME["python"])
+
+
+def get_max_python_version_exclusive() -> Tuple[int, ...]:
+    return SUPPORTED_PYTHON_MAX_EXCLUSIVE
+
+
+def is_python_version_supported(version_info: Tuple[int, ...]) -> bool:
+    min_version = get_min_python_version()
+    max_version = get_max_python_version_exclusive()
+    return min_version <= version_info < max_version
+
+
+def format_supported_python_range() -> str:
+    min_version = get_min_python_version()
+    max_version = get_max_python_version_exclusive()
+    max_supported_minor = max_version[1] - 1
+    return f"{min_version[0]}.{min_version[1]}-{max_version[0]}.{max_supported_minor}"
 
 
 def has_required_voice_mode(discord_module: Any) -> bool:
@@ -67,7 +85,10 @@ def collect_runtime_diagnostics() -> Dict[str, str]:
 def format_runtime_diagnostics() -> str:
     diagnostics = collect_runtime_diagnostics()
     lines = [
-        f"Python: locked {LOCKED_RUNTIME['python']} / current {diagnostics['python']}",
+        (
+            f"Python: supported {format_supported_python_range()} / "
+            f"current {diagnostics['python']}"
+        ),
         f"Python executable: {diagnostics['python_executable']}",
     ]
     for package_name, locked_version in LOCKED_RUNTIME.items():

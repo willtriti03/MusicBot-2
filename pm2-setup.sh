@@ -34,7 +34,7 @@ else
 fi
 
 echo ""
-echo "Python 가상환경 확인 중..."
+echo "Python 인터프리터 확인 중..."
 
 # Python 버전 확인
 if command -v python3 &> /dev/null; then
@@ -44,20 +44,7 @@ else
     echo "⚠️  Python3를 찾을 수 없습니다."
     echo "   인터프리터 경로를 수동으로 설정해야 할 수 있습니다."
 fi
-
-# 가상환경 확인
-if [ -d "venv" ] || [ -d "inter" ]; then
-    if [ -f "venv/bin/python" ]; then
-        echo "✅ 가상환경 발견: venv/bin/python"
-        echo "   ecosystem.config.js의 interpreter를 'venv/bin/python'으로 설정하세요."
-    elif [ -f "inter/bin/python" ]; then
-        echo "✅ 가상환경 발견: inter/bin/python"
-        echo "   ecosystem.config.js의 interpreter를 'inter/bin/python'으로 설정하세요."
-    fi
-else
-    echo "⚠️  가상환경을 찾을 수 없습니다."
-    echo "   시스템 Python을 사용합니다."
-fi
+echo "   ecosystem.config.js는 시스템 Python을 사용하도록 설정되어 있습니다."
 
 echo ""
 echo "로그 디렉토리 생성 중..."
@@ -96,4 +83,3 @@ echo "  # 시스템 부팅 시 자동 시작"
 echo "  pm2 startup"
 echo "  pm2 save"
 echo ""
-

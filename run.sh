@@ -46,7 +46,7 @@ done
 
 # if we don't have a good version for python, bail.
 if [[ "$VerGood" == "0" ]]; then
-    echo "Python 3.10 or higher is required to run MusicBot."
+    echo "Python 3.10 through 3.13 is required to run MusicBot."
     exit 1
 fi
 

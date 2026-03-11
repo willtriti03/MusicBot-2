@@ -3,18 +3,8 @@ module.exports = {
     name: 'musicbot',
     script: 'run.py',
     
-    // Python 인터프리터 설정
-    // 옵션 1: 시스템 Python3 사용 (기본값)
+    // 시스템 Python 3.10-3.13 사용
     interpreter: 'python3',
-    
-    // 옵션 2: 가상환경 Python 사용 (venv가 있는 경우 - 우분투/맥)
-    // interpreter: './venv/bin/python',
-    
-    // 옵션 3: 가상환경 Python 사용 (inter 폴더가 있는 경우 - 우분투/맥)
-    // interpreter: './inter/bin/python',
-    
-    // 옵션 4: Windows 가상환경 사용
-    // interpreter: './venv/Scripts/python.exe',
     
     // 자동 재시작 설정
     autorestart: true,
@@ -56,7 +46,6 @@ module.exports = {
       'logs',
       'audio_cache',
       'data',
-      'venv',
       '.git'
     ],
     
@@ -67,4 +56,3 @@ module.exports = {
     args: ''
   }]
 };
-
