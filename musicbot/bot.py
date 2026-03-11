@@ -5274,30 +5274,31 @@ class MusicBot(commands.Bot):
 
         voice_channel = author.voice.channel
 
-        player = self.get_player_in(guild)
-        if (
-            player
-            and player.voice_client
-            and player.voice_client.is_connected()
-            and guild == voice_channel.guild
-        ):
-            if player.voice_client.channel != voice_channel:
-                await player.voice_client.move_to(voice_channel)
+        session = self.get_playback_session(guild)
+        voice_client = await session.ensure_connected(
+            voice_channel,
+            reason="cmd_summon",
+        )
 
-            if self.config.self_deafen:
-                await guild.change_voice_state(
-                    channel=voice_channel,
-                    self_deaf=True,
-                )
-        else:
-            player = await self.get_player(
-                voice_channel,
-                create=True,
-                deserialize=self.config.persistent_queue,
+        if not voice_client.is_connected():
+            raise exceptions.CommandError(
+                "MusicBot connected to voice but the session did not stay alive. "
+                "Check that the runtime matches requirements.lock and try again."
             )
 
-            if player.is_stopped:
-                player.play()
+        player = await self._ensure_player(
+            voice_channel,
+            create=True,
+            deserialize=self.config.persistent_queue,
+            reason="cmd_summon",
+            session=session,
+        )
+
+        if player.voice_client is not voice_client:
+            player.voice_client = voice_client
+
+        if player.is_stopped:
+            player.play()
 
         log.info(
             "Joining %s/%s",
