@@ -2,6 +2,7 @@ const {
   ApplicationCommandOptionType,
   ChannelType,
   Client,
+  EmbedBuilder,
   GatewayIntentBits,
   MessageFlags,
   PermissionFlagsBits
@@ -12,6 +13,17 @@ const { GuildPlaybackManager } = require("./player");
 const { getDaveRuntimeSummary } = require("./dave");
 
 const EPHEMERAL_FLAGS = MessageFlags.Ephemeral;
+const EMBED_COLORS = {
+  info: 0x2563eb,
+  success: 0x0f766e,
+  warn: 0xc2410c,
+  danger: 0xbe123c,
+  neutral: 0x334155
+};
+const MAX_EMBED_TITLE = 256;
+const MAX_EMBED_DESCRIPTION = 4096;
+const MAX_EMBED_FIELD_NAME = 256;
+const MAX_EMBED_FIELD_VALUE = 1024;
 const LEGACY_REMOVED_COMMANDS = new Set([
   "listen",
   "stoplisten",
@@ -110,10 +122,18 @@ class MusicBotApp {
       } catch (error) {
         const message = error && error.message ? error.message : String(error);
         this.log("error", message);
-        const payload = {
-          content: message,
-          flags: EPHEMERAL_FLAGS
-        };
+        const payload = this._buildEmbedPayload(
+          interaction,
+          {
+            tone: "danger",
+            title: "Command failed",
+            description: message,
+            fields: interaction.commandName
+              ? [{ name: "Command", value: `/${interaction.commandName}`, inline: true }]
+              : []
+          },
+          interaction.deferred || interaction.replied ? {} : { flags: EPHEMERAL_FLAGS }
+        );
         if (interaction.deferred || interaction.replied) {
           await interaction.followUp(payload).catch(() => null);
         } else {
@@ -270,6 +290,204 @@ class MusicBotApp {
     }
   }
 
+  _truncate(value, maxLength) {
+    const text = String(value || "").trim();
+    if (!text) {
+      return "";
+    }
+    if (text.length <= maxLength) {
+      return text;
+    }
+    return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+  }
+
+  _displayNameForMember(member, fallback = "Unknown") {
+    if (member && typeof member === "object") {
+      if (typeof member.displayName === "string" && member.displayName) {
+        return member.displayName;
+      }
+      if (typeof member.username === "string" && member.username) {
+        return member.username;
+      }
+      if (member.user && typeof member.user.username === "string" && member.user.username) {
+        return member.user.username;
+      }
+    }
+    return fallback;
+  }
+
+  _formatDuration(seconds) {
+    if (!Number.isFinite(seconds) || seconds === null || seconds === undefined) {
+      return "Live";
+    }
+
+    const totalSeconds = Math.max(0, Math.floor(Number(seconds)));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    }
+
+    return `${minutes}:${String(secs).padStart(2, "0")}`;
+  }
+
+  _formatProgressBar(currentSeconds, totalSeconds, width = 14) {
+    const safeWidth = Math.max(6, Math.floor(Number(width) || 14));
+    const total = Number(totalSeconds);
+    const current = Number(currentSeconds);
+
+    if (!Number.isFinite(total) || total <= 0) {
+      const midpoint = Math.floor((safeWidth - 1) / 2);
+      return `[${"=".repeat(midpoint)}>${"-".repeat(safeWidth - midpoint - 1)}]`;
+    }
+
+    const ratio = Math.min(1, Math.max(0, current / total));
+    const markerIndex = Math.min(safeWidth - 1, Math.round(ratio * (safeWidth - 1)));
+    let output = "[";
+    for (let index = 0; index < safeWidth; index += 1) {
+      if (index < markerIndex) {
+        output += "=";
+      } else if (index === markerIndex) {
+        output += ">";
+      } else {
+        output += "-";
+      }
+    }
+    output += "]";
+    return output;
+  }
+
+  _formatMeter(value, maximum = 100, width = 10) {
+    const safeMaximum = Math.max(1, Number(maximum) || 100);
+    const clampedValue = Math.min(safeMaximum, Math.max(0, Number(value) || 0));
+    return this._formatProgressBar(clampedValue, safeMaximum, width);
+  }
+
+  _describeSourceMode(mode) {
+    return mode === "stream" ? "Direct stream" : "Cached playback";
+  }
+
+  _describeSourceOrigin(origin) {
+    switch (origin) {
+      case "autoplay":
+        return "Autoplaylist";
+      case "autosimilar":
+        return "Autosimilar";
+      default:
+        return "Manual";
+    }
+  }
+
+  _formatTrackTitle(entry) {
+    const title = this._truncate(entry && entry.title ? entry.title : "Unknown track", 80);
+    const artist = entry && entry.artist ? ` - ${this._truncate(entry.artist, 32)}` : "";
+    return `${title}${artist}`;
+  }
+
+  _formatTrackLine(entry, index) {
+    const position = String(index).padStart(2, "0");
+    const duration = this._formatDuration(entry ? entry.durationSeconds : null);
+    return `\`${position}\` ${this._truncate(this._formatTrackTitle(entry), 70)} | ${duration}`;
+  }
+
+  _formatQueuePreview(entries, options = {}) {
+    const startIndex = Number(options.startIndex || 1);
+    const limit = Number(options.limit || 5);
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return "No tracks waiting.";
+    }
+
+    const lines = entries
+      .slice(0, limit)
+      .map((entry, index) => this._formatTrackLine(entry, startIndex + index));
+
+    if (entries.length > limit) {
+      lines.push(`...and ${entries.length - limit} more.`);
+    }
+
+    return this._truncate(lines.join("\n"), MAX_EMBED_FIELD_VALUE);
+  }
+
+  _getKnownDurationSeconds(entries) {
+    if (!Array.isArray(entries)) {
+      return 0;
+    }
+
+    return entries.reduce((total, entry) => {
+      if (!entry || !Number.isFinite(entry.durationSeconds)) {
+        return total;
+      }
+      return total + Math.max(0, Number(entry.durationSeconds));
+    }, 0);
+  }
+
+  _createEmbed(interaction, options = {}) {
+    const tone = options.tone && EMBED_COLORS[options.tone] ? options.tone : "info";
+    const embed = new EmbedBuilder().setColor(EMBED_COLORS[tone]).setTimestamp(new Date());
+
+    if (this.client.user) {
+      embed.setAuthor({
+        name: this.client.user.displayName || this.client.user.username,
+        iconURL: this.client.user.displayAvatarURL()
+      });
+    }
+
+    if (options.title) {
+      embed.setTitle(this._truncate(options.title, MAX_EMBED_TITLE));
+    }
+    if (options.description) {
+      embed.setDescription(this._truncate(options.description, MAX_EMBED_DESCRIPTION));
+    }
+    if (options.url) {
+      embed.setURL(options.url);
+    }
+    if (options.thumbnailUrl) {
+      embed.setThumbnail(options.thumbnailUrl);
+    }
+    if (options.imageUrl) {
+      embed.setImage(options.imageUrl);
+    }
+
+    const fields = Array.isArray(options.fields)
+      ? options.fields
+          .filter((field) => field && field.name && field.value)
+          .slice(0, 25)
+          .map((field) => ({
+            name: this._truncate(field.name, MAX_EMBED_FIELD_NAME),
+            value: this._truncate(field.value, MAX_EMBED_FIELD_VALUE),
+            inline: Boolean(field.inline)
+          }))
+      : [];
+
+    if (fields.length > 0) {
+      embed.addFields(fields);
+    }
+
+    const footerParts = [
+      interaction.guild ? interaction.guild.name : null,
+      options.footerText || null
+    ].filter(Boolean);
+    if (footerParts.length > 0) {
+      embed.setFooter({
+        text: this._truncate(footerParts.join(" | "), 2048)
+      });
+    }
+
+    return embed;
+  }
+
+  _buildEmbedPayload(interaction, options = {}, extra = {}) {
+    const payload = {
+      embeds: [this._createEmbed(interaction, options)]
+    };
+    if (extra.flags !== undefined) {
+      payload.flags = extra.flags;
+    }
+    return payload;
+  }
+
   async _dispatchInteraction(interaction) {
     const guild = this._requireGuild(interaction);
     const player = await this.playback.get(guild);
@@ -324,6 +542,7 @@ class MusicBotApp {
     const voiceChannel = this._requireMemberVoiceChannel(interaction);
     await player.ensureConnection(voiceChannel, interaction.channelId);
     const query = interaction.options.getString("query", true);
+    const queueDepthBefore = player.queue.length + (player.currentEntry ? 1 : 0);
     const entries = await this.mediaResolver.resolveEntries(query, {
       requestedBy: interaction.member,
       sourceMode,
@@ -334,8 +553,55 @@ class MusicBotApp {
     }
     await player.enqueue(entries, { textChannelId: interaction.channelId });
     await player.playNext();
+    const leadEntry = entries[0];
+    const startedImmediately =
+      Boolean(player.currentEntry) && player.currentEntry.id === leadEntry.id;
+    const requestedBy =
+      leadEntry.requestedByName ||
+      this._displayNameForMember(interaction.member, interaction.user.username);
     await interaction.editReply(
-      `Queued ${entries.length} track(s). First up: **${entries[0].title}**`
+      this._buildEmbedPayload(interaction, {
+        tone: "success",
+        title: entries.length === 1 ? "Added to queue" : `Queued ${entries.length} tracks`,
+        description:
+          entries.length === 1
+            ? `**${this._formatTrackTitle(leadEntry)}**`
+            : `**${this._formatTrackTitle(leadEntry)}**\nand ${entries.length - 1} more track(s).`,
+        url: leadEntry.webpageUrl || leadEntry.originalUrl || leadEntry.query,
+        thumbnailUrl: leadEntry.thumbnailUrl || undefined,
+        fields: [
+          {
+            name: "Status",
+            value: startedImmediately ? "Playing now" : `Queued at #${queueDepthBefore + 1}`,
+            inline: true
+          },
+          {
+            name: "Mode",
+            value: this._describeSourceMode(sourceMode),
+            inline: true
+          },
+          {
+            name: "Voice",
+            value: voiceChannel.name,
+            inline: true
+          },
+          {
+            name: "Requested by",
+            value: requestedBy,
+            inline: true
+          },
+          {
+            name: "Queue depth",
+            value: `${player.queue.length + (player.currentEntry ? 1 : 0)} active track(s)`,
+            inline: true
+          },
+          {
+            name: "Up next",
+            value: this._formatQueuePreview(player.queue, { limit: 4 }),
+            inline: false
+          }
+        ]
+      })
     );
   }
 
@@ -343,13 +609,37 @@ class MusicBotApp {
     await interaction.deferReply({ flags: EPHEMERAL_FLAGS });
     const voiceChannel = this._requireMemberVoiceChannel(interaction);
     await player.ensureConnection(voiceChannel, interaction.channelId);
-    await interaction.editReply(`Connected to **${voiceChannel.name}**.`);
+    await interaction.editReply(
+      this._buildEmbedPayload(interaction, {
+        tone: "success",
+        title: "Connected",
+        description: `Voice session is ready in **${voiceChannel.name}**.`,
+        fields: [
+          {
+            name: "Volume",
+            value: `\`${this._formatMeter(player.getVolumePercent(), 100, 10)}\` ${player.getVolumePercent()}%`,
+            inline: true
+          },
+          {
+            name: "Queue",
+            value: `${player.queue.length + (player.currentEntry ? 1 : 0)} active track(s)`,
+            inline: true
+          }
+        ]
+      })
+    );
   }
 
   async _handleSkip(interaction, player) {
     const skipped = await player.skip();
     await interaction.reply({
-      content: skipped ? "Skipped the current track." : "Nothing is currently playing.",
+      ...this._buildEmbedPayload(interaction, {
+        tone: skipped ? "success" : "warn",
+        title: skipped ? "Skipped" : "Nothing to skip",
+        description: skipped
+          ? "Moved playback to the next track."
+          : "Nothing is currently playing."
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
@@ -357,7 +647,13 @@ class MusicBotApp {
   async _handlePause(interaction, player) {
     const paused = await player.pause();
     await interaction.reply({
-      content: paused ? "Paused playback." : "Playback is not currently running.",
+      ...this._buildEmbedPayload(interaction, {
+        tone: paused ? "warn" : "neutral",
+        title: paused ? "Playback paused" : "Nothing is playing",
+        description: paused
+          ? "The current track has been paused."
+          : "Playback is not currently running."
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
@@ -365,22 +661,129 @@ class MusicBotApp {
   async _handleResume(interaction, player) {
     const resumed = await player.resume();
     await interaction.reply({
-      content: resumed ? "Resumed playback." : "Playback is not currently paused.",
+      ...this._buildEmbedPayload(interaction, {
+        tone: resumed ? "success" : "neutral",
+        title: resumed ? "Playback resumed" : "Nothing to resume",
+        description: resumed
+          ? "The current track is playing again."
+          : "Playback is not currently paused."
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
 
   async _handleQueue(interaction, player) {
-    const lines = player.getQueueLines();
+    const totalActive = player.queue.length + (player.currentEntry ? 1 : 0);
+    const queuedDurationSeconds = this._getKnownDurationSeconds(player.queue);
     await interaction.reply({
-      content: lines.length > 0 ? lines.join("\n") : "The queue is empty.",
+      ...this._buildEmbedPayload(interaction, {
+        tone: totalActive > 0 ? "info" : "neutral",
+        title: totalActive > 0 ? "Queue snapshot" : "Queue is empty",
+        description: player.currentEntry
+          ? `Currently locked on **${this._formatTrackTitle(player.currentEntry)}**.`
+          : "Nothing is currently playing.",
+        thumbnailUrl:
+          (player.currentEntry && player.currentEntry.thumbnailUrl) ||
+          (player.queue[0] && player.queue[0].thumbnailUrl) ||
+          undefined,
+        fields: player.currentEntry
+          ? [
+              {
+                name: "Now playing",
+                value:
+                  `${this._formatTrackTitle(player.currentEntry)}\n` +
+                  `\`${this._formatDuration(player.getProgressSeconds())} / ${this._formatDuration(player.currentEntry.durationSeconds)}\`\n` +
+                  `\`${this._formatProgressBar(player.getProgressSeconds(), player.currentEntry.durationSeconds, 16)}\``,
+                inline: false
+              },
+              {
+                name: `Up next (${player.queue.length})`,
+                value: this._formatQueuePreview(player.queue, { limit: 8 }),
+                inline: false
+              },
+              {
+                name: "Queued time",
+                value: queuedDurationSeconds > 0 ? this._formatDuration(queuedDurationSeconds) : "Unknown",
+                inline: true
+              },
+              {
+                name: "Volume",
+                value: `${player.getVolumePercent()}%`,
+                inline: true
+              },
+              {
+                name: "Refill",
+                value:
+                  `${player.settings.autoplayEnabled ? "Autoplaylist on" : "Autoplaylist off"}\n` +
+                  `${player.settings.autosimilarEnabled ? "Autosimilar on" : "Autosimilar off"}`,
+                inline: true
+              }
+            ]
+          : [
+              {
+                name: `Up next (${player.queue.length})`,
+                value: this._formatQueuePreview(player.queue, { limit: 8 }),
+                inline: false
+              }
+            ]
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
 
   async _handleNowPlaying(interaction, player) {
+    if (!player.currentEntry) {
+      await interaction.reply({
+        ...this._buildEmbedPayload(interaction, {
+          tone: "neutral",
+          title: "Nothing is playing",
+          description: "Start a track with `/play` or `/stream`."
+        }),
+        flags: EPHEMERAL_FLAGS
+      });
+      return;
+    }
+
+    const entry = player.currentEntry;
+    const progressSeconds = player.getProgressSeconds();
+    const hasDuration = Number.isFinite(entry.durationSeconds) && Number(entry.durationSeconds) > 0;
     await interaction.reply({
-      content: player.getNowPlayingText(),
+      ...this._buildEmbedPayload(interaction, {
+        tone: "success",
+        title: this._formatTrackTitle(entry),
+        description: `${this._describeSourceMode(entry.sourceMode)} | ${this._describeSourceOrigin(entry.sourceOrigin)}`,
+        url: entry.webpageUrl || entry.originalUrl || entry.query,
+        thumbnailUrl: entry.thumbnailUrl || undefined,
+        fields: [
+          {
+            name: "Progress",
+            value:
+              `\`${this._formatProgressBar(progressSeconds, entry.durationSeconds, 18)}\`\n` +
+              `\`${this._formatDuration(progressSeconds)} / ${hasDuration ? this._formatDuration(entry.durationSeconds) : "Live"}\``,
+            inline: false
+          },
+          {
+            name: "Requested by",
+            value: entry.requestedByName || "System",
+            inline: true
+          },
+          {
+            name: "Queue",
+            value: `${player.queue.length} waiting`,
+            inline: true
+          },
+          {
+            name: "Volume",
+            value: `${player.getVolumePercent()}%`,
+            inline: true
+          },
+          {
+            name: "Up next",
+            value: player.queue[0] ? this._formatTrackTitle(player.queue[0]) : "No tracks waiting.",
+            inline: false
+          }
+        ]
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
@@ -389,7 +792,18 @@ class MusicBotApp {
     const level = interaction.options.getInteger("level", true);
     await player.setVolume(level);
     await interaction.reply({
-      content: `Volume set to **${level}%**.`,
+      ...this._buildEmbedPayload(interaction, {
+        tone: "info",
+        title: "Volume updated",
+        description: `\`${this._formatMeter(level, 100, 12)}\` ${level}%`,
+        fields: [
+          {
+            name: "Output",
+            value: player.currentEntry ? "Applied to the current track." : "Ready for the next track.",
+            inline: false
+          }
+        ]
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
@@ -397,7 +811,11 @@ class MusicBotApp {
   async _handleDisconnect(interaction, player) {
     await player.disconnect();
     await interaction.reply({
-      content: "Disconnected from voice.",
+      ...this._buildEmbedPayload(interaction, {
+        tone: "neutral",
+        title: "Disconnected",
+        description: "Left the voice channel and cleared the live connection."
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
@@ -408,13 +826,40 @@ class MusicBotApp {
     const value = interaction.options.getString("value");
 
     if (action === "list") {
+      const preview = player.autoplaylist
+        .slice(0, 8)
+        .map((entry, index) => {
+          const label = entry.title || entry.source;
+          return `\`${String(index + 1).padStart(2, "0")}\` ${this._truncate(label, 78)}`;
+        })
+        .join("\n");
       await interaction.reply({
-        content:
-          player.autoplaylist.length > 0
-            ? player.autoplaylist
-                .map((entry, index) => `${index + 1}. ${entry.title || entry.source}`)
-                .join("\n")
-            : "Autoplaylist is empty.",
+        ...this._buildEmbedPayload(interaction, {
+          tone: player.autoplaylist.length > 0 ? "info" : "neutral",
+          title: "Autoplaylist",
+          description:
+            player.autoplaylist.length > 0
+              ? `${player.autoplaylist.length} saved track(s) ready for refill.`
+              : "Autoplaylist is empty.",
+          fields: player.autoplaylist.length > 0
+            ? [
+                {
+                  name: "Entries",
+                  value:
+                    this._truncate(preview, MAX_EMBED_FIELD_VALUE) +
+                    (player.autoplaylist.length > 8
+                      ? `\n...and ${player.autoplaylist.length - 8} more.`
+                      : ""),
+                  inline: false
+                },
+                {
+                  name: "Refill",
+                  value: player.settings.autoplayEnabled ? "Enabled" : "Disabled",
+                  inline: true
+                }
+              ]
+            : []
+        }),
         flags: EPHEMERAL_FLAGS
       });
       return;
@@ -427,7 +872,11 @@ class MusicBotApp {
       }
       await player.updateAutoplaySettings(enabled === "on" || enabled === "true");
       await interaction.reply({
-        content: `Autoplaylist refill is now **${player.settings.autoplayEnabled ? "enabled" : "disabled"}**.`,
+        ...this._buildEmbedPayload(interaction, {
+          tone: player.settings.autoplayEnabled ? "success" : "warn",
+          title: "Autoplaylist refill updated",
+          description: `Autoplaylist refill is now **${player.settings.autoplayEnabled ? "enabled" : "disabled"}**.`
+        }),
         flags: EPHEMERAL_FLAGS
       });
       return;
@@ -440,9 +889,13 @@ class MusicBotApp {
     if (action === "add") {
       const added = await player.addAutoplaySource(value, value);
       await interaction.reply({
-        content: added
-          ? "Added track to the autoplaylist."
-          : "That track is already in the autoplaylist.",
+        ...this._buildEmbedPayload(interaction, {
+          tone: added ? "success" : "warn",
+          title: added ? "Autoplaylist updated" : "Already saved",
+          description: added
+            ? "Added this source to the autoplaylist."
+            : "That track is already in the autoplaylist."
+        }),
         flags: EPHEMERAL_FLAGS
       });
       return;
@@ -451,9 +904,13 @@ class MusicBotApp {
     if (action === "remove") {
       const removed = await player.removeAutoplaySource(value);
       await interaction.reply({
-        content: removed
-          ? "Removed track from the autoplaylist."
-          : "That track was not present in the autoplaylist.",
+        ...this._buildEmbedPayload(interaction, {
+          tone: removed ? "success" : "warn",
+          title: removed ? "Autoplaylist updated" : "Nothing removed",
+          description: removed
+            ? "Removed this source from the autoplaylist."
+            : "That track was not present in the autoplaylist."
+        }),
         flags: EPHEMERAL_FLAGS
       });
       return;
@@ -467,7 +924,11 @@ class MusicBotApp {
     const enabled = interaction.options.getBoolean("enabled", true);
     await player.updateAutosimilarSettings(enabled);
     await interaction.reply({
-      content: `Autosimilar is now **${enabled ? "enabled" : "disabled"}**.`,
+      ...this._buildEmbedPayload(interaction, {
+        tone: enabled ? "success" : "warn",
+        title: "Autosimilar updated",
+        description: `Autosimilar is now **${enabled ? "enabled" : "disabled"}**.`
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
@@ -475,7 +936,11 @@ class MusicBotApp {
   async _handleShuffle(interaction, player) {
     await player.shuffleQueue();
     await interaction.reply({
-      content: "Shuffled the queue.",
+      ...this._buildEmbedPayload(interaction, {
+        tone: "success",
+        title: "Queue shuffled",
+        description: "The waiting tracks were reordered."
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
@@ -483,7 +948,11 @@ class MusicBotApp {
   async _handleClear(interaction, player) {
     await player.clearQueue();
     await interaction.reply({
-      content: "Cleared the queued tracks.",
+      ...this._buildEmbedPayload(interaction, {
+        tone: "warn",
+        title: "Queue cleared",
+        description: "All waiting tracks have been removed."
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
@@ -492,9 +961,13 @@ class MusicBotApp {
     const index = interaction.options.getInteger("index", true) - 1;
     const removed = await player.removeQueueIndex(index);
     await interaction.reply({
-      content: removed
-        ? `Removed **${removed.title}** from the queue.`
-        : "No queued track exists at that index.",
+      ...this._buildEmbedPayload(interaction, {
+        tone: removed ? "success" : "warn",
+        title: removed ? "Removed from queue" : "Nothing removed",
+        description: removed
+          ? `Removed **${this._formatTrackTitle(removed)}** from the queue.`
+          : "No queued track exists at that index."
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
@@ -502,9 +975,28 @@ class MusicBotApp {
   async _handleLatency(interaction, player) {
     const voiceLatency = player.getLatency();
     await interaction.reply({
-      content: `API latency: **${Math.round(this.client.ws.ping)} ms**\nVoice latency: **${Math.round(
-        voiceLatency.wsMs
-      )} ms**`,
+      ...this._buildEmbedPayload(interaction, {
+        tone: "info",
+        title: "Latency",
+        description: "Current gateway and voice timings.",
+        fields: [
+          {
+            name: "Discord API",
+            value: `${Math.round(this.client.ws.ping)} ms`,
+            inline: true
+          },
+          {
+            name: "Voice",
+            value: `${Math.round(voiceLatency.wsMs)} ms`,
+            inline: true
+          },
+          {
+            name: "State",
+            value: player.currentEntry ? "Connected" : "Idle",
+            inline: true
+          }
+        ]
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
@@ -515,9 +1007,21 @@ class MusicBotApp {
       return `${player.guild.name}: ${Math.round(latency.wsMs)} ms`;
     });
     await interaction.reply({
-      content:
-        `API latency: **${Math.round(this.client.ws.ping)} ms**\n` +
-        (lines.length > 0 ? lines.join("\n") : "No active voice sessions."),
+      ...this._buildEmbedPayload(interaction, {
+        tone: "info",
+        title: "Bot latency overview",
+        description: `Discord API latency is **${Math.round(this.client.ws.ping)} ms**.`,
+        fields: [
+          {
+            name: "Guild voice latency",
+            value:
+              lines.length > 0
+                ? this._truncate(lines.join("\n"), MAX_EMBED_FIELD_VALUE)
+                : "No active voice sessions.",
+            inline: false
+          }
+        ]
+      }),
       flags: EPHEMERAL_FLAGS
     });
   }
