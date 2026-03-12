@@ -45,6 +45,8 @@ docker compose up -d --build
 docker compose logs -f musicbot
 ```
 
+This compose stack uses the explicit project name `musicbot-ts` so it does not try to reuse or replace older legacy containers that were created under different names.
+
 If you are migrating from an older manual container, clear the old instance first:
 
 ```bash

@@ -1,3 +1,5 @@
+name: musicbot-ts
+
 services:
   musicbot:
     build:
