@@ -45,6 +45,14 @@ docker compose up -d --build
 docker compose logs -f musicbot
 ```
 
+If you are migrating from an older manual container, clear the old instance first:
+
+```bash
+docker compose down --remove-orphans
+docker rm -f musicbot 2>/dev/null || true
+docker compose up -d --build
+```
+
 The included [docker-compose.yml](/Users/leejungjun/MusicBot-2/docker-compose.yml) mounts:
 
 - [config/config.json](/Users/leejungjun/MusicBot-2/config/config.json) as read-only runtime config

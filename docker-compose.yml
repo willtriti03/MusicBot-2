@@ -3,7 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: musicbot
     restart: unless-stopped
     init: true
     env_file:
@@ -12,4 +11,3 @@ services:
       - ./config/config.json:/app/config/config.json:ro
       - ./data:/app/data
       - ./audio_cache:/app/audio_cache
-
