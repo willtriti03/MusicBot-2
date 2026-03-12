@@ -1,53 +1,78 @@
 # MusicBot
 
-[![GitHub stars](https://img.shields.io/github/stars/Just-Some-Bots/MusicBot.svg)](https://github.com/Just-Some-Bots/MusicBot/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/Just-Some-Bots/MusicBot.svg)](https://github.com/Just-Some-Bots/MusicBot/network)
-[![Python version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
-[![Discord](https://discordapp.com/api/guilds/129489631539494912/widget.png?style=shield)](https://discord.gg/bots)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+MusicBot now runs as a single-process TypeScript/Node application under `ts-bot/`. The old Python runtime, PM2 flow, and embedded sidecar path are no longer the supported deployment targets.
 
-MusicBot is a Discord music bot written for [Python](https://www.python.org "Python homepage") 3.10-3.13. Main bot logic still runs in Python, but regular Discord voice playback now uses an embedded Node.js DAVE sidecar so it can join modern non-stage voice channels after Discord's 2026 DAVE enforcement. It plays requested songs from YouTube and other services into a Discord server (or multiple servers). If the queue is empty, MusicBot will play a list of existing songs that is configurable.
+## Runtime
 
-![Main](https://i.imgur.com/FWcHtcS.png)
+- Node.js `22.12+`
+- `ffmpeg` in `PATH`
+- `yt-dlp` in `PATH`
+- Linux with `systemd` for production deployment
 
-## Setup
-Install dependencies into your current Python environment, build the embedded voice sidecar, and run the bot directly from the repo.
+The bot is slash-command only. The first TypeScript cut includes:
 
-```bash
-python3.13 -m pip install -r requirements.lock
-npm install --prefix voice-sidecar
-npm run build --prefix voice-sidecar
-cp config/1_options.ini config/options.ini
-python3.13 run.py
-```
+- `play`, `stream`, `summon`, `skip`, `pause`, `resume`, `queue`, `np`, `volume`, `disconnect`
+- `autoplaylist`, `autosimilar`, `shuffle`, `clear`, `remove`
+- `latency`, `botlatency`
+- SQLite-backed guild settings, autoplaylist storage, and queue recovery
 
-The main configuration file is `config/options.ini`. If it does not exist yet, copy [`config/1_options.ini`](./config/1_options.ini) to `config/options.ini`.
+These legacy features are intentionally outside the TypeScript rewrite scope:
 
-## Voice Runtime Note
-Discord enforced DAVE on regular voice channels on 2026-03-01. `VoiceTransport = dave-sidecar` is now the default, and requires a local Node.js runtime plus the `voice-sidecar/` npm dependencies.
-
-The sidecar migration currently restores:
-
-- `play`
-- `pause`
-- `resume`
-- `skip`
-- `stop`
-- `volume`
-- queue persistence / recovery
-
-The first DAVE sidecar pass intentionally blocks:
-
-- `listen`
-- `stoplisten`
+- text commands
+- voice recognition / `listen`
 - `seek`
 - `speed`
+- PM2-based process management
 
-### Commands
+## Configuration
 
-There are many commands that can be used with the bot. Most notably, the `play <url>` command (preceded by your command prefix), which will download, process, and play a song from YouTube or a similar site. A full list of commands is available [here](https://just-some-bots.github.io/MusicBot/using/commands/ "Commands").
+Static settings live in `config/config.json`.
 
-### Further reading
+Secrets come from either:
 
-* [Support Discord server](https://discord.gg/bots)
-* [Project license](LICENSE)
+- repo-local `.env`
+- `MUSICBOT_ENV_PATH`
+- Linux `EnvironmentFile`, such as `/etc/musicbot/musicbot.env`
+
+An example environment file is provided at `config/musicbot.env.example`.
+
+## Local Build
+
+```bash
+npm install --prefix ts-bot
+npm run build --prefix ts-bot
+cp config/musicbot.env.example .env
+node ts-bot/dist/main.js
+```
+
+## systemd Deployment
+
+The shipped `musicbot.service` targets this layout:
+
+- app root: `/opt/musicbot`
+- working directory: `/opt/musicbot/ts-bot`
+- service env file: `/etc/musicbot/musicbot.env`
+
+Typical deployment flow:
+
+```bash
+sudo install -d /opt/musicbot /etc/musicbot
+sudo rsync -a --delete --exclude '.git' --exclude 'audio_cache' --exclude 'data' ./ /opt/musicbot/
+sudo npm install --prefix /opt/musicbot/ts-bot
+sudo npm run build --prefix /opt/musicbot/ts-bot
+sudo install -m 0644 /opt/musicbot/musicbot.service /etc/systemd/system/musicbot.service
+sudo install -m 0640 /opt/musicbot/config/musicbot.env.example /etc/musicbot/musicbot.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now musicbot
+sudo systemctl status musicbot
+```
+
+Logs are available through:
+
+```bash
+journalctl -u musicbot -f
+```
+
+## DAVE Note
+
+The TypeScript runtime depends on `discord.js`, `@discordjs/voice`, and `@snazzah/davey`. The codebase now passes DAVE protocol hints through the Node voice path and keeps all voice handling inside the TypeScript process. Actual non-stage voice validation still needs to be done on a Linux host with the production dependency set installed.

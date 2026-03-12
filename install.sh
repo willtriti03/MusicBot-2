@@ -6,66 +6,37 @@ cd "$(dirname "${BASH_SOURCE[0]}")" || {
     exit 1
 }
 
-PySupported=("3.10" "3.11" "3.12" "3.13")
-PyBins=("python3")
-
-for Ver in "${PySupported[@]}" ; do
-    PyBins+=("python${Ver}")
-    PyBins+=("python${Ver//./}")
-done
-
-PyBins+=("python")
-
-Python_Bin=""
-
-for PyBin in "${PyBins[@]}" ; do
-    if ! command -v "$PyBin" > /dev/null 2>&1 ; then
-        continue
+require_command() {
+    if ! command -v "$1" > /dev/null 2>&1; then
+        echo "Missing required command: $1"
+        exit 1
     fi
+}
 
-    PY_VER=($($PyBin -c "import sys; print('%s %s' % sys.version_info[:2])" || { echo "0 0"; }))
-    if [[ "${PY_VER[0]}" != "3" ]]; then
-        continue
-    fi
+require_command node
+require_command npm
+require_command ffmpeg
+require_command yt-dlp
 
-    Candidate="${PY_VER[0]}.${PY_VER[1]}"
-    for Supported in "${PySupported[@]}" ; do
-        if [[ "$Candidate" == "$Supported" ]]; then
-            Python_Bin="$PyBin"
-            break 2
-        fi
-    done
-done
-
-if [[ -z "$Python_Bin" ]]; then
-    echo "Python 3.10 through 3.13 is required to install MusicBot."
+if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)'; then
+    echo "Node.js 22.12 or newer is required."
     exit 1
 fi
 
-if ! command -v node > /dev/null 2>&1; then
-    echo "Node.js is required to build the embedded DAVE voice sidecar."
-    exit 1
-fi
+echo "Installing ts-bot dependencies..."
+npm install --prefix ts-bot
 
-if ! command -v npm > /dev/null 2>&1; then
-    echo "npm is required to build the embedded DAVE voice sidecar."
-    exit 1
-fi
+echo "Building ts-bot..."
+npm run build --prefix ts-bot
 
-echo "Using '${Python_Bin}' to install MusicBot dependencies..."
-"$Python_Bin" -m pip install --upgrade -r requirements.lock
-
-echo "Installing embedded DAVE voice sidecar dependencies..."
-npm install --prefix voice-sidecar
-npm run build --prefix voice-sidecar
-
-if [[ ! -f "config/options.ini" ]]; then
-    cp "config/1_options.ini" "config/options.ini"
+if [[ ! -f ".env" ]]; then
+    cp "config/musicbot.env.example" ".env"
 fi
 
 echo ""
 echo "Install complete."
 echo "Next steps:"
-echo "  1. Edit config/options.ini"
-echo "     - Leave VoiceTransport=dave-sidecar unless you are intentionally testing legacy mode"
-echo "  2. Run: ${Python_Bin} run.py"
+echo "  1. Edit .env or /etc/musicbot/musicbot.env"
+echo "  2. Review config/config.json"
+echo "  3. Run: ./run.sh"
+echo "  4. For systemd deployment, copy this repo to /opt/musicbot and install musicbot.service"

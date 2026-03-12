@@ -1,1 +1,1 @@
-worker: python run.py
+worker: node ts-bot/dist/main.js

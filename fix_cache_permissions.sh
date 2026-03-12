@@ -1,5 +1,5 @@
 #!/bin/bash
-# AudioCachePath 권한 수정 스크립트
+# MusicBot 캐시 디렉토리 권한 수정 스크립트
 # 우분투 환경에서 사용하세요
 
 echo "MusicBot 캐시 디렉토리 권한 수정 스크립트"
@@ -17,9 +17,7 @@ echo ""
 # 기본 캐시 디렉토리 경로
 DEFAULT_CACHE_DIR="$CURRENT_DIR/audio_cache"
 
-# AudioCachePath가 설정되어 있는지 확인 (옵션)
-# config/options.ini에서 AudioCachePath 값을 읽어올 수 있지만, 
-# 여기서는 기본 경로를 사용합니다.
+# TypeScript 런타임은 기본적으로 저장소 루트의 audio_cache를 사용합니다.
 
 CACHE_DIR="$DEFAULT_CACHE_DIR"
 
@@ -98,6 +96,5 @@ echo "=========================================="
 echo "✅ 모든 권한 설정이 완료되었습니다!"
 echo ""
 echo "다음 명령어로 봇을 실행하세요:"
-echo "  python3 run.py"
+echo "  ./run.sh"
 echo ""
-

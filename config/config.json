@@ -1,0 +1,16 @@
+{
+  "logLevel": "info",
+  "ffmpegPath": "ffmpeg",
+  "ytdlpPath": "yt-dlp",
+  "databasePath": "data/musicbot.sqlite",
+  "cacheDir": "audio_cache",
+  "tempDir": "data/tmp",
+  "commandGuildIds": [],
+  "defaultGuildSettings": {
+    "defaultVolume": 0.2,
+    "autoplayEnabled": true,
+    "autosimilarEnabled": true,
+    "leaveAfterQueueEmpty": false,
+    "leaveAfterIdleSeconds": 300
+  }
+}

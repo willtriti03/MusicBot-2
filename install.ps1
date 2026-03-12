@@ -2,73 +2,37 @@ $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
 
-$supported = @("3.10", "3.11", "3.12", "3.13")
-
-function Get-SupportedPython {
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        foreach ($version in $supported) {
-            try {
-                & py "-$version" -c "import sys" *> $null
-                if ($LASTEXITCODE -eq 0) {
-                    return @{
-                        Command = "py"
-                        Args = @("-$version")
-                        Label = "py -$version"
-                    }
-                }
-            } catch {
-            }
-        }
-    }
-
-    foreach ($command in @("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python")) {
-        if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
-            continue
-        }
-
-        try {
-            $version = & $command -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"
-            if ($LASTEXITCODE -eq 0 -and $supported -contains $version.Trim()) {
-                return @{
-                    Command = $command
-                    Args = @()
-                    Label = $command
-                }
-            }
-        } catch {
-        }
-    }
-
-    return $null
-}
-
-$python = Get-SupportedPython
-if ($null -eq $python) {
-    Write-Error "Python 3.10 through 3.13 is required to install MusicBot."
-}
-
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Error "Node.js is required to build the embedded DAVE voice sidecar."
+    Write-Error "Node.js 22.12 or newer is required."
 }
 
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-    Write-Error "npm is required to build the embedded DAVE voice sidecar."
+    Write-Error "npm is required to build MusicBot."
 }
 
-Write-Host "Using '$($python.Label)' to install MusicBot dependencies..."
-& $python.Command @($python.Args) -m pip install --upgrade -r requirements.lock
+$version = & node -p "process.versions.node"
+$parts = $version.Trim().Split(".")
+if ([int]$parts[0] -lt 22 -or ([int]$parts[0] -eq 22 -and [int]$parts[1] -lt 12)) {
+    Write-Error "Node.js 22.12 or newer is required."
+}
 
-Write-Host "Installing embedded DAVE voice sidecar dependencies..."
-& npm install --prefix voice-sidecar
-& npm run build --prefix voice-sidecar
+Write-Host "Installing ts-bot dependencies..."
+& npm install --prefix ts-bot
 
-if (-not (Test-Path "config/options.ini")) {
-    Copy-Item "config/1_options.ini" "config/options.ini"
+Write-Host "Building ts-bot..."
+& npm run build --prefix ts-bot
+
+if (-not (Test-Path ".env")) {
+    Copy-Item "config/musicbot.env.example" ".env"
 }
 
 Write-Host ""
 Write-Host "Install complete."
-Write-Host "Next steps:"
-Write-Host "  1. Edit config/options.ini"
-Write-Host "     - Leave VoiceTransport=dave-sidecar unless you are intentionally testing legacy mode"
-Write-Host "  2. Run: $($python.Label) run.py"
+Write-Host "Configuration:"
+Write-Host "  - Edit .env for local development."
+Write-Host "  - Edit config/config.json for runtime defaults."
+Write-Host ""
+Write-Host "Run locally with:"
+Write-Host "  node ts-bot/dist/main.js"
+Write-Host ""
+Write-Host "Production deployment is Linux + systemd only."

@@ -9,7 +9,7 @@ dectalk/
 discord.log
 logs/
 data/
-config/options.ini
+*.sqlite
 config/permissions.ini
 config/aliases.json
 config/autoplaylist.txt
@@ -21,7 +21,9 @@ config/blocklist_users.txt
 config/blocklist_songs.txt
 config/playlists/
 media/
-voice-sidecar/node_modules/
+ts-bot/node_modules/
+ts-bot/dist/
 
 config/autoplaylist.cachemap.json
 .env
+config/musicbot.env
