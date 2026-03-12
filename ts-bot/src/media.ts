@@ -58,13 +58,26 @@ function runCommand(command, args, options = {}) {
         return;
       }
 
-      reject(
-        new Error(
-          `${command} exited with code ${code}. ${stderr.trim() || stdout.trim()}`
-        )
-      );
+      reject(normalizeCommandError(command, code, stderr.trim() || stdout.trim()));
     });
   });
+}
+
+function normalizeCommandError(command, code, message) {
+  const cleaned = String(message || "")
+    .split(/\r?\n/u)
+    .filter((line) => !line.includes("Deprecated Feature:"))
+    .filter((line) => !line.includes("The following options have been deprecated:"))
+    .filter((line) => !line.includes("Please remove them from your command/configuration"))
+    .filter((line) => !line.includes("See  https://github.com/yt-dlp/yt-dlp/issues/14198"))
+    .join("\n")
+    .trim();
+
+  if (/Video unavailable/i.test(cleaned)) {
+    return new Error("The requested video is unavailable and cannot be played.");
+  }
+
+  return new Error(`${command} exited with code ${code}. ${cleaned}`);
 }
 
 function createMissingCommandError(command) {
@@ -189,7 +202,7 @@ class MediaResolver {
 
   async extractInfo(query, options = {}) {
     this._assertCommandAvailable(this.config.ytdlpPath, DEPENDENCY_PROBES["yt-dlp"]);
-    const args = ["-J", "--no-warnings", "--no-call-home"];
+    const args = ["-J", "--no-warnings"];
     if (options.allowSearch) {
       args.push("--default-search", "ytsearch1");
     }
@@ -245,7 +258,6 @@ class MediaResolver {
 
     const args = [
       "--no-warnings",
-      "--no-call-home",
       "--no-playlist",
       "-f",
       "bestaudio/best",
@@ -405,6 +417,7 @@ module.exports = {
   createMissingCommandError,
   isSpotifyUrl,
   isUrl,
+  normalizeCommandError,
   parseSpotifyUrl,
   probeExternalCommand,
   runCommand
