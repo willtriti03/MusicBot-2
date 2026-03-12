@@ -36,6 +36,23 @@ Secrets come from either:
 
 An example environment file is provided at `config/musicbot.env.example`.
 
+## Docker
+
+If you want a one-shot runtime with Node.js, `ffmpeg`, and `yt-dlp` bundled, use Docker:
+
+```bash
+docker compose up -d --build
+docker compose logs -f musicbot
+```
+
+The included [docker-compose.yml](/Users/leejungjun/MusicBot-2/docker-compose.yml) mounts:
+
+- [config/config.json](/Users/leejungjun/MusicBot-2/config/config.json) as read-only runtime config
+- `./data` for the SQLite database
+- `./audio_cache` for downloaded audio files
+
+Secrets come from the repo-local [/.env](/Users/leejungjun/MusicBot-2/.env). Inside the container, startup fails fast if `DISCORD_TOKEN` is missing.
+
 ## Local Build
 
 ```bash
