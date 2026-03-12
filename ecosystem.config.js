@@ -15,6 +15,7 @@ module.exports = {
     env: {
       NODE_ENV: 'production',
       PYTHONUNBUFFERED: '1'
+      // MUSICBOT_NODE_BIN: '/usr/bin/node'
     },
     
     // 로그 설정

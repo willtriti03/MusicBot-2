@@ -130,8 +130,8 @@ def get_voice_runtime_issue(
             "Discord enforced DAVE for non-stage voice channels on "
             f"{DAVE_ENFORCEMENT_DATE}, but the installed discord wrapper "
             f"({installed_version}) does not expose detectable DAVE negotiation hooks. "
-            "This build cannot join regular voice channels until it is migrated to a "
-            "DAVE-capable voice transport."
+            "The built-in py-cord voice transport cannot join regular voice channels "
+            "until it is replaced with a DAVE-capable transport."
         )
 
     return None

@@ -8,6 +8,8 @@ import asyncio
 import logging
 from typing import Optional, Callable, Dict, Any
 import discord
+
+from .voice_transport import VoiceTransport, is_voice_transport
 import speech_recognition as sr
 from io import BytesIO
 import wave
@@ -459,7 +461,7 @@ class VoiceListener:
         self.recognition_handler = recognition_handler
         self.active_sinks = {}
 
-    async def start_listening(self, voice_client: discord.VoiceClient, text_channel):
+    async def start_listening(self, voice_client: VoiceTransport, text_channel):
         """
         음성 채널에서 실시간 듣기 시작
 
@@ -555,7 +557,7 @@ class VoiceListener:
 
         return finished_callback
 
-    async def stop_listening(self, voice_client: discord.VoiceClient):
+    async def stop_listening(self, voice_client: VoiceTransport):
         """
         음성 채널에서 듣기 중지
 
@@ -582,9 +584,9 @@ class VoiceListener:
         """Clean up any active recording sinks during shutdown."""
         for guild_id in list(self.active_sinks.keys()):
             guild = self.bot.get_guild(guild_id)
-            voice_client = guild.voice_client if guild else None
+            voice_client = self.bot._get_managed_voice_client(guild) if guild else None
 
-            if voice_client:
+            if is_voice_transport(voice_client):
                 try:
                     await self.stop_listening(voice_client)
                     continue

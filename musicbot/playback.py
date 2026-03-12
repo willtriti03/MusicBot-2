@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Optional
 
 import discord
 
+from .voice_transport import VoiceTransport, is_voice_transport
+
 if TYPE_CHECKING:
     from .bot import MusicBot, VoiceableChannel
     from .player import MusicPlayer
@@ -22,7 +24,7 @@ class GuildSession:
         self.bot: "MusicBot" = bot
         self.guild_id: int = guild_id
         self.player: Optional["MusicPlayer"] = None
-        self.voice_client: Optional[discord.VoiceClient] = None
+        self.voice_client: Optional[VoiceTransport] = None
         self.channel_id: Optional[int] = None
         self.connect_generation: int = 0
         self.connecting: bool = False
@@ -37,21 +39,25 @@ class GuildSession:
     def sync_state(self) -> None:
         guild = self.guild
         player = self.bot.players.get(self.guild_id)
-        voice_client: Optional[discord.VoiceClient] = None
+        voice_client: Optional[VoiceTransport] = None
 
         if guild is not None:
             for candidate in self.bot._collect_guild_voice_clients(guild):
-                if isinstance(candidate, discord.VoiceClient) and candidate.is_connected():
+                if is_voice_transport(candidate) and candidate.is_connected():
                     voice_client = candidate
                     break
 
-            if voice_client is None and isinstance(guild.voice_client, discord.VoiceClient):
-                voice_client = guild.voice_client
+            managed_voice_client = self.bot._get_managed_voice_client(guild)
+            if voice_client is None and is_voice_transport(managed_voice_client):
+                voice_client = managed_voice_client
+
+        if voice_client is None and guild is not None and is_voice_transport(guild.voice_client):
+            voice_client = guild.voice_client
 
         if (
             voice_client is None
             and player is not None
-            and isinstance(player.voice_client, discord.VoiceClient)
+            and is_voice_transport(player.voice_client)
         ):
             voice_client = player.voice_client
 
@@ -74,7 +80,7 @@ class GuildSession:
         *,
         reason: str,
         allow_move: bool = True,
-    ) -> discord.VoiceClient:
+    ) -> VoiceTransport:
         self.sync_state()
         voice_client = await self.bot._connect_voice_client(
             channel,

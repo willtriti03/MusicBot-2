@@ -47,8 +47,20 @@ if ($null -eq $python) {
     Write-Error "Python 3.10 through 3.13 is required to install MusicBot."
 }
 
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Error "Node.js is required to build the embedded DAVE voice sidecar."
+}
+
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Write-Error "npm is required to build the embedded DAVE voice sidecar."
+}
+
 Write-Host "Using '$($python.Label)' to install MusicBot dependencies..."
 & $python.Command @($python.Args) -m pip install --upgrade -r requirements.lock
+
+Write-Host "Installing embedded DAVE voice sidecar dependencies..."
+& npm install --prefix voice-sidecar
+& npm run build --prefix voice-sidecar
 
 if (-not (Test-Path "config/options.ini")) {
     Copy-Item "config/1_options.ini" "config/options.ini"
@@ -58,4 +70,5 @@ Write-Host ""
 Write-Host "Install complete."
 Write-Host "Next steps:"
 Write-Host "  1. Edit config/options.ini"
+Write-Host "     - Leave VoiceTransport=dave-sidecar unless you are intentionally testing legacy mode"
 Write-Host "  2. Run: $($python.Label) run.py"

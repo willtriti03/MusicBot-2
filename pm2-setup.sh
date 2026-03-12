@@ -47,6 +47,18 @@ fi
 echo "   ecosystem.config.js는 시스템 Python을 사용하도록 설정되어 있습니다."
 
 echo ""
+echo "Node.js / npm 확인 중..."
+if ! command -v node &> /dev/null || ! command -v npm &> /dev/null; then
+    echo "❌ DAVE sidecar 빌드를 위해 Node.js와 npm이 필요합니다."
+    exit 1
+fi
+echo "✅ Node.js: $(command -v node)"
+echo "✅ npm: $(command -v npm)"
+echo "DAVE sidecar 의존성을 설치/빌드합니다..."
+npm install --prefix voice-sidecar
+npm run build --prefix voice-sidecar
+
+echo ""
 echo "로그 디렉토리 생성 중..."
 mkdir -p logs
 

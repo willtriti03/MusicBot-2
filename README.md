@@ -6,15 +6,17 @@
 [![Discord](https://discordapp.com/api/guilds/129489631539494912/widget.png?style=shield)](https://discord.gg/bots)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-MusicBot is a Discord music bot written for [Python](https://www.python.org "Python homepage") 3.10-3.13, using the [py-cord](https://github.com/Pycord-Development/pycord) voice stack. It plays requested songs from YouTube and other services into a Discord server (or multiple servers). If the queue is empty, MusicBot will play a list of existing songs that is configurable. The bot features a permission system, allowing owners to restrict commands to certain people. MusicBot is capable of streaming live media into a voice channel (experimental).
+MusicBot is a Discord music bot written for [Python](https://www.python.org "Python homepage") 3.10-3.13. Main bot logic still runs in Python, but regular Discord voice playback now uses an embedded Node.js DAVE sidecar so it can join modern non-stage voice channels after Discord's 2026 DAVE enforcement. It plays requested songs from YouTube and other services into a Discord server (or multiple servers). If the queue is empty, MusicBot will play a list of existing songs that is configurable.
 
 ![Main](https://i.imgur.com/FWcHtcS.png)
 
 ## Setup
-Install dependencies into your current Python environment and run the bot directly from the repo.
+Install dependencies into your current Python environment, build the embedded voice sidecar, and run the bot directly from the repo.
 
 ```bash
 python3.13 -m pip install -r requirements.lock
+npm install --prefix voice-sidecar
+npm run build --prefix voice-sidecar
 cp config/1_options.ini config/options.ini
 python3.13 run.py
 ```
@@ -22,7 +24,24 @@ python3.13 run.py
 The main configuration file is `config/options.ini`. If it does not exist yet, copy [`config/1_options.ini`](./config/1_options.ini) to `config/options.ini`.
 
 ## Voice Runtime Note
-Discord enforced DAVE on regular voice channels on 2026-03-01. This repository now refuses regular voice-channel joins when the installed Discord Python wrapper does not expose DAVE negotiation hooks, instead of joining and immediately getting disconnected by Discord.
+Discord enforced DAVE on regular voice channels on 2026-03-01. `VoiceTransport = dave-sidecar` is now the default, and requires a local Node.js runtime plus the `voice-sidecar/` npm dependencies.
+
+The sidecar migration currently restores:
+
+- `play`
+- `pause`
+- `resume`
+- `skip`
+- `stop`
+- `volume`
+- queue persistence / recovery
+
+The first DAVE sidecar pass intentionally blocks:
+
+- `listen`
+- `stoplisten`
+- `seek`
+- `speed`
 
 ### Commands
 

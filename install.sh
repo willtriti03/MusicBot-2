@@ -42,8 +42,22 @@ if [[ -z "$Python_Bin" ]]; then
     exit 1
 fi
 
+if ! command -v node > /dev/null 2>&1; then
+    echo "Node.js is required to build the embedded DAVE voice sidecar."
+    exit 1
+fi
+
+if ! command -v npm > /dev/null 2>&1; then
+    echo "npm is required to build the embedded DAVE voice sidecar."
+    exit 1
+fi
+
 echo "Using '${Python_Bin}' to install MusicBot dependencies..."
 "$Python_Bin" -m pip install --upgrade -r requirements.lock
+
+echo "Installing embedded DAVE voice sidecar dependencies..."
+npm install --prefix voice-sidecar
+npm run build --prefix voice-sidecar
 
 if [[ ! -f "config/options.ini" ]]; then
     cp "config/1_options.ini" "config/options.ini"
@@ -53,4 +67,5 @@ echo ""
 echo "Install complete."
 echo "Next steps:"
 echo "  1. Edit config/options.ini"
+echo "     - Leave VoiceTransport=dave-sidecar unless you are intentionally testing legacy mode"
 echo "  2. Run: ${Python_Bin} run.py"

@@ -21,6 +21,7 @@ config/blocklist_users.txt
 config/blocklist_songs.txt
 config/playlists/
 media/
+voice-sidecar/node_modules/
 
 config/autoplaylist.cachemap.json
 .env

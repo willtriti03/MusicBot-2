@@ -5,17 +5,19 @@ import json
 import logging
 import os
 import sys
+import time
 from enum import Enum
 from threading import Thread
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import discord
-from discord import AudioSource, FFmpegPCMAudio, PCMVolumeTransformer, VoiceClient
+from discord import AudioSource, FFmpegPCMAudio, PCMVolumeTransformer
 
 from .constructs import Serializable, Serializer, SkipState
 from .entry import LocalFilePlaylistEntry, StreamPlaylistEntry, URLPlaylistEntry
 from .exceptions import FFmpegError, FFmpegWarning
 from .lib.event_emitter import EventEmitter
+from .voice_transport import VoiceTransport, supports_sidecar_playback
 
 if TYPE_CHECKING:
     from .bot import MusicBot
@@ -100,14 +102,14 @@ class MusicPlayer(EventEmitter, Serializable):
     def __init__(
         self,
         bot: "MusicBot",
-        voice_client: VoiceClient,
+        voice_client: VoiceTransport,
         playlist: "Playlist",
     ):
         """
         Manage a MusicPlayer with all its bits and bolts.
 
         :param: bot:  A MusicBot discord client instance.
-        :param: voice_client:  a discord.VoiceClient object used for playback.
+        :param: voice_client:  a voice transport object used for playback.
         :param: playlist:  a collection of playable entries to be played.
         """
         super().__init__()
@@ -115,7 +117,7 @@ class MusicPlayer(EventEmitter, Serializable):
         self.loop: asyncio.AbstractEventLoop = bot.loop
         self.loopqueue: bool = False
         self.repeatsong: bool = False
-        self.voice_client: VoiceClient = voice_client
+        self.voice_client: VoiceTransport = voice_client
         self.playlist: "Playlist" = playlist
         self.autoplaylist: List[str] = []
         self.state: MusicPlayerState = MusicPlayerState.STOPPED
@@ -126,12 +128,16 @@ class MusicPlayer(EventEmitter, Serializable):
 
         self._volume = bot.config.default_volume
         self._play_lock = asyncio.Lock()
-        self._current_player: Optional[VoiceClient] = None
+        self._current_player: Optional[VoiceTransport] = None
         self._current_entry: Optional[EntryTypes] = None
         self._stderr_future: Optional[AsyncFuture] = None
 
         self._source: Optional[SourcePlaybackCounter] = None
         self._pending_call_later: Optional[EntryTypes] = None
+        self._playback_started_monotonic: Optional[float] = None
+        self._playback_paused_monotonic: Optional[float] = None
+        self._playback_paused_total: float = 0.0
+        self._playback_start_offset: float = 0.0
 
         self.playlist.on("entry-added", self.on_entry_added)
         self.playlist.on("entry-failed", self.on_entry_failed)
@@ -150,6 +156,8 @@ class MusicPlayer(EventEmitter, Serializable):
         self._volume = value
         if self._source:
             self._source._source.volume = value
+        elif supports_sidecar_playback(self.voice_client):
+            self.voice_client.set_volume(value)
 
     def on_entry_added(
         self, playlist: "Playlist", entry: EntryTypes, defer_serialize: bool = False
@@ -176,6 +184,29 @@ class MusicPlayer(EventEmitter, Serializable):
         """
         self.emit("error", player=self, entry=entry, ex=error)
 
+    def _reset_progress_clock(self) -> None:
+        self._playback_started_monotonic = None
+        self._playback_paused_monotonic = None
+        self._playback_paused_total = 0.0
+        self._playback_start_offset = 0.0
+
+    def _start_progress_clock(self, entry: EntryTypes) -> None:
+        self._playback_started_monotonic = time.monotonic()
+        self._playback_paused_monotonic = None
+        self._playback_paused_total = 0.0
+        self._playback_start_offset = float(getattr(entry, "start_time", 0.0) or 0.0)
+
+    def handle_transport_crash(self) -> None:
+        if self.current_entry and hasattr(self.current_entry, "set_start_time"):
+            self.current_entry.set_start_time(self.progress)
+            self.playlist.entries.appendleft(self.current_entry)
+
+        self._current_entry = None
+        self._source = None
+        self._current_player = None
+        self.state = MusicPlayerState.STOPPED
+        self._reset_progress_clock()
+
     def skip(self) -> None:
         """Skip the current playing entry but just killing playback."""
         log.noise(  # type: ignore[attr-defined]
@@ -192,6 +223,7 @@ class MusicPlayer(EventEmitter, Serializable):
             "MusicPlayer.stop() is called:  %s", repr(self)
         )
         self.state = MusicPlayerState.STOPPED
+        self._reset_progress_clock()
         self._kill_current_player()
 
         self.emit("stop", player=self)
@@ -212,6 +244,11 @@ class MusicPlayer(EventEmitter, Serializable):
         )
         if self.is_paused and self._current_player:
             self._current_player.resume()
+            if self._playback_paused_monotonic is not None:
+                self._playback_paused_total += (
+                    time.monotonic() - self._playback_paused_monotonic
+                )
+                self._playback_paused_monotonic = None
             self.state = MusicPlayerState.PLAYING
             self.emit("resume", player=self, entry=self.current_entry)
             return
@@ -232,6 +269,8 @@ class MusicPlayer(EventEmitter, Serializable):
         )
         if self.is_playing:
             self.state = MusicPlayerState.PAUSED
+            if self._playback_paused_monotonic is None:
+                self._playback_paused_monotonic = time.monotonic()
 
             if self._current_player:
                 self._current_player.pause()
@@ -255,6 +294,7 @@ class MusicPlayer(EventEmitter, Serializable):
         self.state = MusicPlayerState.DEAD
         self.playlist.clear()
         self._events.clear()
+        self._reset_progress_clock()
         self._kill_current_player()
 
     def _playback_finished(self, error: Optional[Exception] = None) -> None:
@@ -284,6 +324,7 @@ class MusicPlayer(EventEmitter, Serializable):
 
         self._current_entry = None
         self._source = None
+        self._reset_progress_clock()
 
         if error:
             self.stop()
@@ -316,7 +357,7 @@ class MusicPlayer(EventEmitter, Serializable):
         if self._current_player:
             try:
                 self._current_player.stop()
-            except OSError:
+            except (OSError, RuntimeError):
                 log.noise(  # type: ignore[attr-defined]
                     "Possible Warning from kill_current_player()", exc_info=True
                 )
@@ -484,44 +525,57 @@ class MusicPlayer(EventEmitter, Serializable):
                     )
                     return
 
-                boptions = "-nostdin"
-                # aoptions = "-vn -b:a 192k"
-                if isinstance(entry, (URLPlaylistEntry, LocalFilePlaylistEntry)):
-                    aoptions = entry.aoptions
-                    # check for before options, currently just -ss here.
-                    if entry.boptions:
-                        boptions += f" {entry.boptions}"
-                else:
-                    aoptions = "-vn"
-                    # Improve resilience for streaming inputs by enabling ffmpeg reconnects
-                    boptions += " -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
-
-                log.ffmpeg(  # type: ignore[attr-defined]
-                    "Creating player with options: %s %s %s",
-                    boptions,
-                    aoptions,
-                    entry.filename,
-                )
                 try:
-                    ffmpeg_source = FFmpegPCMAudio(
-                        entry.filename,
-                        before_options=boptions,
-                        options=aoptions,
-                        stderr=subprocess.PIPE,
-                    )
+                    if supports_sidecar_playback(self.voice_client):
+                        self._source = None
+                        self._stderr_future = asyncio.Future()
+                        if isinstance(self._stderr_future, asyncio.Future):
+                            self._stderr_future.set_result(True)
+                        log.voicedebug(  # type: ignore[attr-defined]
+                            "Delegating playback of %r to sidecar transport %r",
+                            entry,
+                            self.voice_client,
+                        )
+                        await self.voice_client.play_entry(
+                            entry,
+                            volume=self.volume,
+                            after=self._playback_finished,
+                        )
+                    else:
+                        boptions = "-nostdin"
+                        if isinstance(entry, (URLPlaylistEntry, LocalFilePlaylistEntry)):
+                            aoptions = entry.aoptions
+                            if entry.boptions:
+                                boptions += f" {entry.boptions}"
+                        else:
+                            aoptions = "-vn"
+                            boptions += " -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 
-                    self._source = SourcePlaybackCounter(
-                        PCMVolumeTransformer(
-                            ffmpeg_source,
-                            self.volume,
-                        ),
-                        start_time=entry.start_time,
-                        playback_speed=entry.playback_speed,
-                    )
-                    log.voicedebug(  # type: ignore[attr-defined]
-                        "Playing %r using %r", self._source, self.voice_client
-                    )
-                    self.voice_client.play(self._source, after=self._playback_finished)
+                        log.ffmpeg(  # type: ignore[attr-defined]
+                            "Creating player with options: %s %s %s",
+                            boptions,
+                            aoptions,
+                            entry.filename,
+                        )
+                        ffmpeg_source = FFmpegPCMAudio(
+                            entry.filename,
+                            before_options=boptions,
+                            options=aoptions,
+                            stderr=subprocess.PIPE,
+                        )
+
+                        self._source = SourcePlaybackCounter(
+                            PCMVolumeTransformer(
+                                ffmpeg_source,
+                                self.volume,
+                            ),
+                            start_time=entry.start_time,
+                            playback_speed=entry.playback_speed,
+                        )
+                        log.voicedebug(  # type: ignore[attr-defined]
+                            "Playing %r using %r", self._source, self.voice_client
+                        )
+                        self.voice_client.play(self._source, after=self._playback_finished)  # type: ignore[attr-defined]
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     log.exception(
                         "Failed to start FFmpeg playback for entry:  %s",
@@ -544,25 +598,27 @@ class MusicPlayer(EventEmitter, Serializable):
 
                 self.state = MusicPlayerState.PLAYING
                 self._current_entry = entry
+                self._start_progress_clock(entry)
 
-                self._stderr_future = asyncio.Future()
+                if not supports_sidecar_playback(self.voice_client):
+                    self._stderr_future = asyncio.Future()
 
-                try:
-                    stderr_pipe = ffmpeg_source._process.stderr  # type: ignore[attr-defined]
-                except Exception:
-                    stderr_pipe = None
+                    try:
+                        stderr_pipe = ffmpeg_source._process.stderr  # type: ignore[attr-defined]
+                    except Exception:
+                        stderr_pipe = None
 
-                if stderr_pipe is not None:
-                    stderr_thread = Thread(
-                        target=filter_stderr,
-                        args=(stderr_pipe, self._stderr_future),
-                        name="stderr reader",
-                    )
+                    if stderr_pipe is not None:
+                        stderr_thread = Thread(
+                            target=filter_stderr,
+                            args=(stderr_pipe, self._stderr_future),
+                            name="stderr reader",
+                        )
 
-                    stderr_thread.start()
-                else:
-                    if isinstance(self._stderr_future, asyncio.Future):
-                        self._stderr_future.set_result(True)
+                        stderr_thread.start()
+                    else:
+                        if isinstance(self._stderr_future, asyncio.Future):
+                            self._stderr_future.set_result(True)
 
                 self.emit("play", player=self, entry=entry)
 
@@ -626,7 +682,7 @@ class MusicPlayer(EventEmitter, Serializable):
         cls,
         raw_json: Dict[str, Any],
         bot: Optional["MusicBot"] = None,
-        voice_client: Optional[VoiceClient] = None,
+        voice_client: Optional[VoiceTransport] = None,
         playlist: Optional["Playlist"] = None,
         **kwargs: Any,
     ) -> "MusicPlayer":
@@ -656,7 +712,7 @@ class MusicPlayer(EventEmitter, Serializable):
         cls,
         raw_json: str,
         bot: "MusicBot",  # pylint: disable=unused-argument
-        voice_client: VoiceClient,  # pylint: disable=unused-argument
+        voice_client: VoiceTransport,  # pylint: disable=unused-argument
         playlist: "Playlist",  # pylint: disable=unused-argument
     ) -> Optional["MusicPlayer"]:
         """
@@ -709,6 +765,13 @@ class MusicPlayer(EventEmitter, Serializable):
         """
         if self._source:
             return self._source.progress
+        if self._playback_started_monotonic is not None and self.current_entry:
+            if self._playback_paused_monotonic is not None:
+                elapsed = self._playback_paused_monotonic - self._playback_started_monotonic
+            else:
+                elapsed = time.monotonic() - self._playback_started_monotonic
+            elapsed -= self._playback_paused_total
+            return max(0.0, self._playback_start_offset + elapsed)
         return 0
 
     @property
@@ -719,6 +782,12 @@ class MusicPlayer(EventEmitter, Serializable):
         """
         if self._source:
             return self._source.session_progress
+        if self._playback_started_monotonic is not None:
+            if self._playback_paused_monotonic is not None:
+                elapsed = self._playback_paused_monotonic - self._playback_started_monotonic
+            else:
+                elapsed = time.monotonic() - self._playback_started_monotonic
+            return max(0.0, elapsed - self._playback_paused_total)
         return 0
 
 

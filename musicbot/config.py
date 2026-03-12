@@ -46,6 +46,7 @@ from .utils import (
     set_logging_max_kept_logs,
     set_logging_rotate_date_format,
 )
+from .voice_transport import VOICE_TRANSPORT_DAVE_SIDECAR, VOICE_TRANSPORT_LEGACY
 
 if TYPE_CHECKING:
     import discord
@@ -563,6 +564,27 @@ class Config:
             getter="getboolean",
             comment="MusicBot will automatically deafen itself when entering a voice channel.",
         )
+        self.voice_transport: str = self.register.init_option(
+            section="MusicBot",
+            option="VoiceTransport",
+            dest="voice_transport",
+            default=ConfigDefaults.voice_transport,
+            comment=(
+                "Select the voice transport backend. "
+                "`dave-sidecar` runs an embedded Node.js sidecar for Discord DAVE voice sessions; "
+                "`legacy` uses the built-in py-cord voice client."
+            ),
+        )
+        self.voice_sidecar_node_bin: str = self.register.init_option(
+            section="MusicBot",
+            option="VoiceSidecarNodeBin",
+            dest="voice_sidecar_node_bin",
+            default=ConfigDefaults.voice_sidecar_node_bin,
+            comment=(
+                "Optional path to the Node.js executable used for the embedded DAVE sidecar. "
+                "Leave blank to use MUSICBOT_NODE_BIN or `node` from PATH."
+            ),
+        )
         self.leave_inactive_channel: bool = self.register.init_option(
             section="MusicBot",
             option="LeaveInactiveVC",
@@ -934,6 +956,18 @@ class Config:
             )
             self.default_speed = max(min(self.default_speed, 100.0), 0.5)
 
+        self.voice_transport = self.voice_transport.strip().lower()
+        if self.voice_transport not in {
+            VOICE_TRANSPORT_DAVE_SIDECAR,
+            VOICE_TRANSPORT_LEGACY,
+        }:
+            log.warning(
+                "VoiceTransport value `%s` is invalid. Falling back to `%s`.",
+                self.voice_transport,
+                VOICE_TRANSPORT_DAVE_SIDECAR,
+            )
+            self.voice_transport = VOICE_TRANSPORT_DAVE_SIDECAR
+
         if self.enable_local_media and not self.media_file_dir.is_dir():
             self.media_file_dir.mkdir(exist_ok=True)
 
@@ -1195,6 +1229,8 @@ class ConfigDefaults:
     usealias: bool = True
     searchlist: bool = False
     self_deafen: bool = True
+    voice_transport: str = VOICE_TRANSPORT_DAVE_SIDECAR
+    voice_sidecar_node_bin: str = ""
     leave_inactive_channel: bool = False
     leave_inactive_channel_timeout: float = 300.0
     leave_after_queue_empty: bool = False
