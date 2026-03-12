@@ -27,3 +27,4 @@ ts-bot/dist/
 config/autoplaylist.cachemap.json
 .env
 config/musicbot.env
+.env

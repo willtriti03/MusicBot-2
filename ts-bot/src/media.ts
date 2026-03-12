@@ -1,6 +1,11 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
+
+const DEPENDENCY_PROBES = {
+  ffmpeg: ["-version"],
+  "yt-dlp": ["--version"]
+};
 
 function isUrl(value) {
   return /^https?:\/\//i.test(String(value || ""));
@@ -40,7 +45,13 @@ function runCommand(command, args, options = {}) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (error && error.code === "ENOENT") {
+        reject(createMissingCommandError(command));
+        return;
+      }
+      reject(error);
+    });
     child.on("close", (code) => {
       if (code === 0) {
         resolve({ stdout, stderr });
@@ -56,11 +67,84 @@ function runCommand(command, args, options = {}) {
   });
 }
 
+function createMissingCommandError(command) {
+  const envVar =
+    command === "ffmpeg"
+      ? "MUSICBOT_FFMPEG_PATH"
+      : command === "yt-dlp"
+        ? "MUSICBOT_YTDLP_PATH"
+        : "";
+
+  const envHint = envVar
+    ? ` or point ${envVar} at the binary`
+    : "";
+
+  return new Error(
+    `Missing required runtime command: ${command}. Install ${command}${envHint}.`
+  );
+}
+
+function probeExternalCommand(command, args) {
+  const result = spawnSync(command, args, {
+    stdio: "ignore"
+  });
+  if (result.error) {
+    if (result.error.code === "ENOENT") {
+      return {
+        ok: false,
+        error: createMissingCommandError(command)
+      };
+    }
+    return {
+      ok: false,
+      error: result.error
+    };
+  }
+
+  return {
+    ok: result.status === 0
+  };
+}
+
 class MediaResolver {
   constructor(config) {
     this.config = config;
     this.spotifyToken = null;
     this.spotifyTokenExpiresAt = 0;
+    this.commandStatus = new Map();
+  }
+
+  _assertCommandAvailable(command, args) {
+    const cached = this.commandStatus.get(command);
+    if (cached === true) {
+      return;
+    }
+
+    const probe = probeExternalCommand(command, args);
+    if (!probe.ok) {
+      throw probe.error || createMissingCommandError(command);
+    }
+
+    this.commandStatus.set(command, true);
+  }
+
+  getStartupWarnings() {
+    const warnings = [];
+    for (const [label, args] of Object.entries(DEPENDENCY_PROBES)) {
+      const command =
+        label === "ffmpeg" ? this.config.ffmpegPath : this.config.ytdlpPath;
+      const probe = probeExternalCommand(command, args);
+      if (!probe.ok) {
+        warnings.push(
+          probe.error && probe.error.message
+            ? probe.error.message
+            : `Failed to probe runtime command: ${command}`
+        );
+        continue;
+      }
+      this.commandStatus.set(command, true);
+    }
+    return warnings;
   }
 
   _createQueueEntry(data) {
@@ -104,6 +188,7 @@ class MediaResolver {
   }
 
   async extractInfo(query, options = {}) {
+    this._assertCommandAvailable(this.config.ytdlpPath, DEPENDENCY_PROBES["yt-dlp"]);
     const args = ["-J", "--no-warnings", "--no-call-home"];
     if (options.allowSearch) {
       args.push("--default-search", "ytsearch1");
@@ -137,6 +222,7 @@ class MediaResolver {
   }
 
   async getPlaybackSource(entry) {
+    this._assertCommandAvailable(this.config.ffmpegPath, DEPENDENCY_PROBES.ffmpeg);
     if (entry.sourceMode === "play") {
       const cached = await this.getCachedOrDownloadedFile(entry);
       return {
@@ -316,8 +402,10 @@ class MediaResolver {
 
 module.exports = {
   MediaResolver,
+  createMissingCommandError,
   isSpotifyUrl,
   isUrl,
   parseSpotifyUrl,
+  probeExternalCommand,
   runCommand
 };

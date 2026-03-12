@@ -61,6 +61,9 @@ class MusicBotApp {
     }
     const daveRuntime = getDaveRuntimeSummary();
     this.log("info", daveRuntime.summary);
+    for (const warning of this.mediaResolver.getStartupWarnings()) {
+      this.log("warn", warning);
+    }
     if (this.config.loadedEnvPath) {
       this.log("info", `Loaded environment from ${this.config.loadedEnvPath}`);
     }
