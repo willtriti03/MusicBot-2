@@ -39,11 +39,12 @@ An example environment file is provided at `config/musicbot.env.example`.
 ## Local Build
 
 ```bash
-npm install --prefix ts-bot
-npm run build --prefix ts-bot
+./install.sh
 cp config/musicbot.env.example .env
-node ts-bot/dist/main.js
+./run.sh
 ```
+
+On apt-based Linux hosts, `./install.sh` will attempt to install Node.js `22.x`, `ffmpeg`, `yt-dlp`, and the local npm dependencies for you. On macOS, the same script can do the equivalent via Homebrew.
 
 ## systemd Deployment
 
