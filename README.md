@@ -45,7 +45,7 @@ docker compose up -d --build
 docker compose logs -f musicbot
 ```
 
-This compose stack uses the explicit project name `musicbot-ts` so it does not try to reuse or replace older legacy containers that were created under different names.
+This compose stack uses the explicit project name `musicbot-ts` so it does not try to reuse or replace older legacy containers that were created under different names. On Linux it also runs with `network_mode: host`, because the bot does not expose ports and this avoids Docker bridge/iptables failures on hosts with broken `DOCKER-ISOLATION` chains.
 
 If you are migrating from an older manual container, clear the old instance first:
 
