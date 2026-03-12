@@ -37,5 +37,5 @@ RUN npm run build --prefix ts-bot \
     && mkdir -p /app/data /app/audio_cache /app/data/tmp \
     && chmod +x /app/docker-entrypoint.sh
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/app/docker-entrypoint.sh"]
 CMD ["node", "ts-bot/dist/main.js"]

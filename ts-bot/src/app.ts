@@ -3,12 +3,25 @@ const {
   ChannelType,
   Client,
   GatewayIntentBits,
+  MessageFlags,
   PermissionFlagsBits
 } = require("discord.js");
 
 const { MediaResolver } = require("./media");
 const { GuildPlaybackManager } = require("./player");
 const { getDaveRuntimeSummary } = require("./dave");
+
+const EPHEMERAL_FLAGS = MessageFlags.Ephemeral;
+const LEGACY_REMOVED_COMMANDS = new Set([
+  "listen",
+  "stoplisten",
+  "seek",
+  "speed",
+  "restart",
+  "shutdown",
+  "config",
+  "perms"
+]);
 
 class MusicBotApp {
   constructor(config, store) {
@@ -81,7 +94,7 @@ class MusicBotApp {
   }
 
   _wireClient() {
-    this.client.once("ready", async () => {
+    this.client.once("clientReady", async () => {
       this.log("info", `Logged in as ${this.client.user.tag}`);
       await this._registerCommands();
       await this.playback.recoverAll(this.client.guilds.cache);
@@ -99,7 +112,7 @@ class MusicBotApp {
         this.log("error", message);
         const payload = {
           content: message,
-          ephemeral: true
+          flags: EPHEMERAL_FLAGS
         };
         if (interaction.deferred || interaction.replied) {
           await interaction.followUp(payload).catch(() => null);
@@ -297,6 +310,11 @@ class MusicBotApp {
       case "botlatency":
         return this._handleBotLatency(interaction);
       default:
+        if (LEGACY_REMOVED_COMMANDS.has(interaction.commandName)) {
+          throw new Error(
+            `/${interaction.commandName} is not available in the TypeScript runtime. Remove stale slash commands and use the supported slash commands only.`
+          );
+        }
         throw new Error(`Unsupported command: ${interaction.commandName}`);
     }
   }
@@ -322,7 +340,7 @@ class MusicBotApp {
   }
 
   async _handleSummon(interaction, player) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: EPHEMERAL_FLAGS });
     const voiceChannel = this._requireMemberVoiceChannel(interaction);
     await player.ensureConnection(voiceChannel, interaction.channelId);
     await interaction.editReply(`Connected to **${voiceChannel.name}**.`);
@@ -332,7 +350,7 @@ class MusicBotApp {
     const skipped = await player.skip();
     await interaction.reply({
       content: skipped ? "Skipped the current track." : "Nothing is currently playing.",
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -340,7 +358,7 @@ class MusicBotApp {
     const paused = await player.pause();
     await interaction.reply({
       content: paused ? "Paused playback." : "Playback is not currently running.",
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -348,7 +366,7 @@ class MusicBotApp {
     const resumed = await player.resume();
     await interaction.reply({
       content: resumed ? "Resumed playback." : "Playback is not currently paused.",
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -356,14 +374,14 @@ class MusicBotApp {
     const lines = player.getQueueLines();
     await interaction.reply({
       content: lines.length > 0 ? lines.join("\n") : "The queue is empty.",
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
   async _handleNowPlaying(interaction, player) {
     await interaction.reply({
       content: player.getNowPlayingText(),
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -372,7 +390,7 @@ class MusicBotApp {
     await player.setVolume(level);
     await interaction.reply({
       content: `Volume set to **${level}%**.`,
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -380,7 +398,7 @@ class MusicBotApp {
     await player.disconnect();
     await interaction.reply({
       content: "Disconnected from voice.",
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -397,7 +415,7 @@ class MusicBotApp {
                 .map((entry, index) => `${index + 1}. ${entry.title || entry.source}`)
                 .join("\n")
             : "Autoplaylist is empty.",
-        ephemeral: true
+        flags: EPHEMERAL_FLAGS
       });
       return;
     }
@@ -410,7 +428,7 @@ class MusicBotApp {
       await player.updateAutoplaySettings(enabled === "on" || enabled === "true");
       await interaction.reply({
         content: `Autoplaylist refill is now **${player.settings.autoplayEnabled ? "enabled" : "disabled"}**.`,
-        ephemeral: true
+        flags: EPHEMERAL_FLAGS
       });
       return;
     }
@@ -425,7 +443,7 @@ class MusicBotApp {
         content: added
           ? "Added track to the autoplaylist."
           : "That track is already in the autoplaylist.",
-        ephemeral: true
+        flags: EPHEMERAL_FLAGS
       });
       return;
     }
@@ -436,7 +454,7 @@ class MusicBotApp {
         content: removed
           ? "Removed track from the autoplaylist."
           : "That track was not present in the autoplaylist.",
-        ephemeral: true
+        flags: EPHEMERAL_FLAGS
       });
       return;
     }
@@ -450,7 +468,7 @@ class MusicBotApp {
     await player.updateAutosimilarSettings(enabled);
     await interaction.reply({
       content: `Autosimilar is now **${enabled ? "enabled" : "disabled"}**.`,
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -458,7 +476,7 @@ class MusicBotApp {
     await player.shuffleQueue();
     await interaction.reply({
       content: "Shuffled the queue.",
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -466,7 +484,7 @@ class MusicBotApp {
     await player.clearQueue();
     await interaction.reply({
       content: "Cleared the queued tracks.",
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -477,7 +495,7 @@ class MusicBotApp {
       content: removed
         ? `Removed **${removed.title}** from the queue.`
         : "No queued track exists at that index.",
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -487,7 +505,7 @@ class MusicBotApp {
       content: `API latency: **${Math.round(this.client.ws.ping)} ms**\nVoice latency: **${Math.round(
         voiceLatency.wsMs
       )} ms**`,
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 
@@ -500,7 +518,7 @@ class MusicBotApp {
       content:
         `API latency: **${Math.round(this.client.ws.ping)} ms**\n` +
         (lines.length > 0 ? lines.join("\n") : "No active voice sessions."),
-      ephemeral: true
+      flags: EPHEMERAL_FLAGS
     });
   }
 }

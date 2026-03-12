@@ -3,6 +3,7 @@ const {
   AudioPlayerStatus,
   NoSubscriberBehavior,
   StreamType,
+  VoiceConnectionDisconnectReason,
   VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
@@ -31,6 +32,7 @@ class GuildPlayer {
     this.currentEntry = null;
     this.lastPlayedEntry = null;
     this.connection = null;
+    this.boundConnection = null;
     this.ffmpegProcess = null;
     this.voiceChannelId = null;
     this.textChannelId = null;
@@ -40,6 +42,17 @@ class GuildPlayer {
     this.pausedAccumulatedMs = 0;
     this.initialized = false;
     this.isAdvancing = false;
+    this.skipRequested = false;
+    this.disconnectRequested = false;
+
+    this._connectionErrorListener = (error) => {
+      this.app.enqueueBackgroundTask(this._handleConnectionError(error));
+    };
+    this._connectionStateListener = (oldState, newState) => {
+      this.app.enqueueBackgroundTask(
+        this._handleConnectionStateChange(oldState, newState)
+      );
+    };
 
     this.settings = this.store.getGuildSettings(
       guild.id,
@@ -131,6 +144,92 @@ class GuildPlayer {
     this.pausedAccumulatedMs = 0;
   }
 
+  _bindConnection(connection) {
+    if (!connection || this.boundConnection === connection) {
+      return;
+    }
+
+    if (this.boundConnection) {
+      this.boundConnection.off("error", this._connectionErrorListener);
+      this.boundConnection.off("stateChange", this._connectionStateListener);
+    }
+
+    this.boundConnection = connection;
+    this.boundConnection.on("error", this._connectionErrorListener);
+    this.boundConnection.on("stateChange", this._connectionStateListener);
+  }
+
+  _unbindConnection() {
+    if (!this.boundConnection) {
+      return;
+    }
+
+    this.boundConnection.off("error", this._connectionErrorListener);
+    this.boundConnection.off("stateChange", this._connectionStateListener);
+    this.boundConnection = null;
+  }
+
+  _destroyConnection() {
+    if (!this.connection) {
+      this._unbindConnection();
+      return;
+    }
+
+    const connection = this.connection;
+    this.connection = null;
+    this._unbindConnection();
+    connection.destroy();
+  }
+
+  _requeueCurrentEntryOnFailure() {
+    if (!this.currentEntry || this.skipRequested || this.disconnectRequested) {
+      return;
+    }
+
+    const replayEntry = {
+      ...this.currentEntry,
+      startTimeSeconds: this.getProgressSeconds()
+    };
+    this.queue.unshift(replayEntry);
+  }
+
+  async _handleConnectionError(error) {
+    this.app.log(
+      "warn",
+      `[guild:${this.guild.id}] voice connection error: ${error && error.message ? error.message : String(error)}`
+    );
+    this._requeueCurrentEntryOnFailure();
+    this.currentEntry = null;
+    this._resetProgressClock();
+    this._cleanupFfmpeg();
+    this._destroyConnection();
+    this.pendingIdleAction = "halt";
+    await this.persist();
+  }
+
+  async _handleConnectionStateChange(oldState, newState) {
+    if (!newState || oldState.status === newState.status) {
+      return;
+    }
+
+    if (newState.status === VoiceConnectionStatus.Destroyed) {
+      this.connection = null;
+      this._unbindConnection();
+      await this.persist();
+      return;
+    }
+
+    if (
+      newState.status === VoiceConnectionStatus.Disconnected &&
+      newState.reason !== VoiceConnectionDisconnectReason.AdapterUnavailable
+    ) {
+      this.app.log(
+        "warn",
+        `[guild:${this.guild.id}] voice connection disconnected: ${newState.reason || "unknown"}`
+      );
+    }
+  }
+
   async ensureConnection(channel, textChannelId = null) {
     const existing = getVoiceConnection(this.guild.id);
     this.connection = existing || this.connection;
@@ -147,6 +246,7 @@ class GuildPlayer {
     } else {
       this.connection = joinVoiceChannel(buildVoiceJoinConfig(channel));
     }
+    this._bindConnection(this.connection);
     this.connection.subscribe(this.audioPlayer);
 
     await entersState(this.connection, VoiceConnectionStatus.Ready, 30_000);
@@ -244,6 +344,8 @@ class GuildPlayer {
       }
 
       this.currentEntry = this.queue.shift();
+      this.skipRequested = false;
+      this.disconnectRequested = false;
       const playbackSource = await this.mediaResolver.getPlaybackSource(this.currentEntry);
       const resource = this._createAudioResource(playbackSource, this.currentEntry);
 
@@ -303,8 +405,11 @@ class GuildPlayer {
   async _handleIdle() {
     const action = this.pendingIdleAction;
     this.pendingIdleAction = "advance";
+    const skipped = this.skipRequested;
+    this.skipRequested = false;
+    this.disconnectRequested = false;
     const finishedEntry = this.currentEntry;
-    if (finishedEntry) {
+    if (finishedEntry && !skipped) {
       this.lastPlayedEntry = finishedEntry;
     }
     this.currentEntry = null;
@@ -312,10 +417,7 @@ class GuildPlayer {
     this._cleanupFfmpeg();
 
     if (action === "disconnect") {
-      if (this.connection) {
-        this.connection.destroy();
-        this.connection = null;
-      }
+      this._destroyConnection();
       await this.persist();
       return;
     }
@@ -355,22 +457,21 @@ class GuildPlayer {
     if (!this.currentEntry) {
       return false;
     }
+    this.skipRequested = true;
     this.pendingIdleAction = "advance";
     this.audioPlayer.stop(true);
     return true;
   }
 
   async disconnect() {
+    this.disconnectRequested = true;
     this.pendingIdleAction = "disconnect";
     if (this.currentEntry) {
       this.audioPlayer.stop(true);
       return;
     }
 
-    if (this.connection) {
-      this.connection.destroy();
-      this.connection = null;
-    }
+    this._destroyConnection();
     await this.persist();
   }
 
