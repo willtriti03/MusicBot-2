@@ -28,3 +28,4 @@ config/autoplaylist.cachemap.json
 .env
 config/musicbot.env
 .env
+.env
