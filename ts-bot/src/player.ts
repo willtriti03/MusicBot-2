@@ -15,6 +15,7 @@ const { ChannelType } = require("discord.js");
 
 const {
   buildAutosimilarQuery,
+  chooseAutosimilarEntry,
   chooseNextAutoplayEntry,
   shuffleEntries
 } = require("./policies");
@@ -363,7 +364,7 @@ class GuildPlayer {
     if (this.settings.autoplayEnabled && this.autoplaylist.length > 0) {
       const picked = chooseNextAutoplayEntry(
         this.autoplaylist,
-        this.lastPlayedEntry ? this.lastPlayedEntry.originalUrl : ""
+        this.lastPlayedEntry
       );
       if (picked) {
         this.queue.push({
@@ -394,9 +395,10 @@ class GuildPlayer {
           sourceMode: "play",
           sourceOrigin: "autosimilar"
         });
-        if (entries.length > 0) {
-          entries[0].sourceOrigin = "autosimilar";
-          this.queue.push(entries[0]);
+        const picked = chooseAutosimilarEntry(entries, this.lastPlayedEntry);
+        if (picked) {
+          picked.sourceOrigin = "autosimilar";
+          this.queue.push(picked);
         }
       }
     }
