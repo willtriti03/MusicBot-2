@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const path = require("node:path");
 
 const DEFAULT_CONFIG = {
@@ -6,6 +7,7 @@ const DEFAULT_CONFIG = {
   ffmpegPath: "ffmpeg",
   ytdlpPath: "yt-dlp",
   databasePath: "data/musicbot.sqlite",
+  instanceLockPath: "",
   cacheDir: "audio_cache",
   tempDir: "data/tmp",
   commandGuildIds: [],
@@ -39,6 +41,19 @@ function resolveFromRoot(rootDir, value) {
     return value;
   }
   return path.isAbsolute(value) ? value : path.resolve(rootDir, value);
+}
+
+function buildDefaultInstanceLockPath(configPath, databasePath, discordToken) {
+  const fingerprint = crypto
+    .createHash("sha256")
+    .update(`${configPath}\n${discordToken || ""}`)
+    .digest("hex")
+    .slice(0, 12);
+
+  return path.join(
+    path.dirname(databasePath),
+    `musicbot-instance-${fingerprint}.lock`
+  );
 }
 
 function parseEnvFile(contents) {
@@ -97,6 +112,11 @@ function loadConfig(options = {}) {
 
   const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const merged = mergeConfig(DEFAULT_CONFIG, raw);
+  const discordToken =
+    process.env.DISCORD_TOKEN || process.env.MUSICBOT_DISCORD_TOKEN || "";
+  const databasePath = resolveFromRoot(repoRoot, merged.databasePath);
+  const configuredLockPath =
+    process.env.MUSICBOT_INSTANCE_LOCK_PATH || merged.instanceLockPath;
 
   return {
     repoRoot,
@@ -113,7 +133,10 @@ function loadConfig(options = {}) {
       process.env.YTDLP_PATH ||
       merged.ytdlpPath ||
       "yt-dlp",
-    databasePath: resolveFromRoot(repoRoot, merged.databasePath),
+    databasePath,
+    instanceLockPath:
+      resolveFromRoot(repoRoot, configuredLockPath) ||
+      buildDefaultInstanceLockPath(configPath, databasePath, discordToken),
     cacheDir: resolveFromRoot(repoRoot, merged.cacheDir),
     tempDir: resolveFromRoot(repoRoot, merged.tempDir),
     commandGuildIds: Array.isArray(merged.commandGuildIds)
@@ -130,8 +153,7 @@ function loadConfig(options = {}) {
         merged.defaultGuildSettings.leaveAfterIdleSeconds || 300
       )
     },
-    discordToken:
-      process.env.DISCORD_TOKEN || process.env.MUSICBOT_DISCORD_TOKEN || "",
+    discordToken,
     spotifyClientId:
       process.env.SPOTIFY_CLIENT_ID ||
       process.env.MUSICBOT_SPOTIFY_CLIENT_ID ||

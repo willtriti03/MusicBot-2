@@ -1,28 +1,57 @@
 const { ensureRuntimeDirectories, loadConfig } = require("./config");
 const { SqliteStore } = require("./store");
 const { MusicBotApp } = require("./app");
+const { acquireRuntimeLock } = require("./runtime-lock");
 
 async function main() {
   const config = loadConfig();
   ensureRuntimeDirectories(config);
+  const runtimeLock = acquireRuntimeLock(config);
 
-  const store = new SqliteStore(config);
-  const app = new MusicBotApp(config, store);
-
-  const shutdown = async (signal) => {
-    console.log(`[${new Date().toISOString()}] Received ${signal}, shutting down.`);
-    await app.stop();
-    process.exit(0);
+  const releaseLock = () => {
+    runtimeLock.release();
   };
+  process.on("exit", releaseLock);
 
-  process.on("SIGINT", () => {
-    void shutdown("SIGINT");
-  });
-  process.on("SIGTERM", () => {
-    void shutdown("SIGTERM");
-  });
+  try {
+    const store = new SqliteStore(config);
+    const app = new MusicBotApp(config, store);
+    let shutdownPromise = null;
 
-  await app.start();
+    const shutdown = async (signal) => {
+      if (shutdownPromise) {
+        return shutdownPromise;
+      }
+
+      shutdownPromise = (async () => {
+        let exitCode = 0;
+        console.log(`[${new Date().toISOString()}] Received ${signal}, shutting down.`);
+        try {
+          await app.stop();
+        } catch (error) {
+          exitCode = 1;
+          console.error(error && error.stack ? error.stack : String(error));
+        } finally {
+          releaseLock();
+        }
+        process.exit(exitCode);
+      })();
+
+      return shutdownPromise;
+    };
+
+    process.on("SIGINT", () => {
+      void shutdown("SIGINT");
+    });
+    process.on("SIGTERM", () => {
+      void shutdown("SIGTERM");
+    });
+
+    await app.start();
+  } catch (error) {
+    releaseLock();
+    throw error;
+  }
 }
 
 main().catch((error) => {
